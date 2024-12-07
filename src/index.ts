@@ -143,10 +143,14 @@ async function buildArtifact() {
 /**
  * Find the latest built artifact
  */
-function findLatestArtifact(): string | undefined {
+function findLatestArtifact(): string {
     const artifacts = fs.readdirSync(process.cwd()).filter(f => f.startsWith('cars_artifact_') && f.endsWith('.tgz'));
-    if (artifacts.length === 0) return undefined;
-    return artifacts.sort().pop();
+    const found = artifacts.sort().pop();
+    if (!found) {
+        console.error('No artifact, run `cars build` first.')
+        process.exit(1)
+    }
+    return found
 }
 
 /**
@@ -168,7 +172,7 @@ program
     });
 
 program
-    .command('reset')
+    .command('config reset')
     .description('Reset your CARS configuration.')
     .action(() => {
         deleteConfig();
@@ -202,7 +206,7 @@ program
     .action(async () => {
         const config = await requireRegistered();
         const client = getAuthriteClient(config);
-        const result = await client.createSignedRequest('/api/v1/get-projects', {});
+        const result = await client.createSignedRequest('/api/v1/projects/list', {});
         printJSON(result);
     });
 
@@ -232,7 +236,7 @@ program
     .action(async (projectId) => {
         const config = await requireRegistered();
         const client = getAuthriteClient(config);
-        const result = await client.createSignedRequest(`/api/v1/get-project/${projectId}/logs`, {});
+        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/logs/show`, {});
         printJSON(result);
     });
 
@@ -242,13 +246,42 @@ program
     .action(async (projectId) => {
         const config = await requireRegistered();
         const client = getAuthriteClient(config);
-        const result = await client.createSignedRequest(`/api/v1/get-project/${projectId}/deploys`, {});
+        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploys/list`, {});
         printJSON(result);
     });
 
+//
+// Deployment Commands
+//
+
 program
-    .command('project deploy <projectId>')
-    .description('Create a new deployment for a project')
+    .command('deploy <projectId>')
+    .description('Deploy a project')
+    .action(async (projectId) => {
+        const artifactPath = findLatestArtifact();
+        const config = await requireRegistered();
+        const client = getAuthriteClient(config);
+        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploy`, {});
+        // result should include { url, deploymentId }
+        const spinner = ora('Uploading artifact...').start();
+        const artifactData = fs.readFileSync(artifactPath);
+        try {
+            // The upload endpoint expects a POST request with octet-stream body
+            await axios.post(result.url, artifactData, {
+                headers: {
+                    'Content-Type': 'application/octet-stream'
+                }
+            });
+            spinner.succeed('Artifact uploaded successfully.');
+        } catch (error: any) {
+            spinner.fail('Artifact upload failed.');
+            console.error(error.response?.data || error.message);
+        }
+    });
+
+program
+    .command('deploy get-upload-url <projectId>')
+    .description('Create a new deployment for a project and get the upload URL')
     .action(async (projectId) => {
         const config = await requireRegistered();
         const client = getAuthriteClient(config);
@@ -258,24 +291,10 @@ program
         console.log(`Upload URL: ${result.url}`);
     });
 
-//
-// Deployment Commands
-//
-
 program
-    .command('deploy logs <deploymentId>')
-    .description('View logs of a deployment')
-    .action(async (deploymentId) => {
-        const config = await requireRegistered();
-        const client = getAuthriteClient(config);
-        const result = await client.createSignedRequest(`/api/v1/get-deploy/${deploymentId}/logs`, {});
-        printJSON(result);
-    });
-
-program
-    .command('deploy upload <deploymentId> <uploadURL> <artifactPath>')
-    .description('Upload a built artifact to the given deployment URL')
-    .action(async (deploymentId, uploadURL, artifactPath) => {
+    .command('deploy upload-files <uploadURL> <artifactPath>')
+    .description('Upload a built artifact to the given URL')
+    .action(async (uploadURL, artifactPath) => {
         if (!fs.existsSync(artifactPath)) {
             console.error(`Artifact not found: ${artifactPath}`);
             process.exit(1);
@@ -296,10 +315,14 @@ program
         }
     });
 
-//
-// Composite deploy command (Optional convenience)
-// You could add a command that does build + project deploy + deploy upload in one go.
-// For now, we keep them separate to demonstrate full API usage.
-//
+program
+    .command('deploy logs <deploymentId>')
+    .description('View logs of a deployment')
+    .action(async (deploymentId) => {
+        const config = await requireRegistered();
+        const client = getAuthriteClient(config);
+        const result = await client.createSignedRequest(`/api/v1/deploy/${deploymentId}/logs/show`, {});
+        printJSON(result);
+    });
 
 program.parse(process.argv);
