@@ -3,7 +3,6 @@ import { program } from 'commander';
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
-import ora from 'ora';
 import * as tar from 'tar';
 import os from 'os';
 import { spawnSync } from 'child_process';
@@ -38,7 +37,6 @@ const CARS_CONFIG_PATH = path.resolve(os.homedir(), '.cars-config.json');
 //
 // Utility functions for config management
 //
-
 function loadConfigsFile(): CarsConfigsFile {
     if (!fs.existsSync(CARS_CONFIG_PATH)) {
         return { configs: [] };
@@ -124,7 +122,7 @@ function setActiveConfig(name: string) {
 async function createConfigInteractive(name?: string) {
     const configsFile = loadConfigsFile();
     if (!name) {
-        name = await generateUniqueConfigName(configsFile);
+        name = generateUniqueConfigName(configsFile);
     }
 
     const cloudChoices = [
@@ -296,7 +294,6 @@ function generateUniqueConfigName(configsFile: CarsConfigsFile): string {
 //
 // Setting and getting config values
 //
-
 function getConfigValue(key: string) {
     const config = getActiveConfig();
     if (!config) {
@@ -323,7 +320,6 @@ async function setConfigValue(key: string, value: string) {
     }
 
     if (key === 'autoSetProjectId') {
-        // value should be boolean
         const boolVal = value.toLowerCase() === 'true';
         config.autoSetProjectId = boolVal;
     } else {
@@ -343,7 +339,6 @@ async function setConfigValue(key: string, value: string) {
 //
 // Project logic
 //
-
 async function buildArtifact() {
     if (!fs.existsSync('deployment-info.json')) {
         console.error('No deployment-info.json found in current directory.');
@@ -358,7 +353,6 @@ async function buildArtifact() {
     console.log('Building local project artifact...');
     const artifactName = `cars_artifact_${Date.now()}.tgz`;
     spawnSync('npm', ['i'], { stdio: 'inherit' });
-    // Attempt to compile backend if npm run compile is available
     if (fs.existsSync('backend/package.json')) {
         spawnSync('npm', ['i'], { cwd: 'backend', stdio: 'inherit' });
         spawnSync('npm', ['run', 'compile'], { cwd: 'backend', stdio: 'inherit' });
@@ -399,10 +393,7 @@ function printJSON(obj: any) {
 //
 // Handling projectId inference
 //
-
 function maybeUpdateProjectIdInConfig(config: CarsConfigProfile, projectId: string) {
-    // If autoSetProjectId is true and we have a defaultProjectDir equal to current directory,
-    // update the defaultProjectId to the given projectId if it's different.
     if (config.autoSetProjectId !== false) {
         if (!config.defaultProjectDir) {
             config.defaultProjectDir = process.cwd();
@@ -417,27 +408,31 @@ function maybeUpdateProjectIdInConfig(config: CarsConfigProfile, projectId: stri
 }
 
 //
-// Commands
+// CLI definition
 //
+program.name('cars').description('CARS CLI').version('1.0.0');
 
-// Config commands
+// Config Commands
+const configCommand = program
+    .command('config')
+    .description('Manage configuration profiles');
 
-program
-    .command('config create [name]')
+configCommand
+    .command('create [name]')
     .description('Create a new configuration profile')
     .action(async (name) => {
         await createConfigInteractive(name);
     });
 
-program
-    .command('config list')
+configCommand
+    .command('list')
     .description('List all configuration profiles')
     .action(() => {
         listConfigs();
     });
 
-program
-    .command('config activate <name>')
+configCommand
+    .command('activate <name>')
     .description('Activate a configuration profile')
     .action(async (name) => {
         setActiveConfig(name);
@@ -450,44 +445,43 @@ program
         console.log(`Configuration "${name}" is now active.`);
     });
 
-program
-    .command('config edit <name>')
+configCommand
+    .command('edit <name>')
     .description('Edit a configuration profile')
     .action(async (name) => {
         await editConfigInteractive(name);
     });
 
-program
-    .command('config delete <name>')
+configCommand
+    .command('delete <name>')
     .description('Delete a configuration profile')
     .action((name) => {
         deleteConfig(name);
     });
 
-program
-    .command('config get <key>')
+configCommand
+    .command('get <key>')
     .description('Get a value from the currently-active config')
     .action((key) => {
         getConfigValue(key);
     });
 
-program
-    .command('config set <key> <value>')
+configCommand
+    .command('set <key> <value>')
     .description('Set a value in the currently-active config')
     .action(async (key, value) => {
         await setConfigValue(key, value);
     });
 
-program
-    .command('config reset')
+configCommand
+    .command('reset')
     .description('Reset your CARS configurations (delete all).')
     .action(() => {
         deleteConfigFile();
         console.log('CARS configs deleted.');
     });
 
-// Build command
-
+// Build command (top-level)
 program
     .command('build')
     .description('Build local artifact for deployment')
@@ -496,12 +490,13 @@ program
         await buildArtifact();
     });
 
-//
 // Project Commands
-//
+const projectCommand = program
+    .command('project')
+    .description('Manage projects');
 
-program
-    .command('project create')
+projectCommand
+    .command('create')
     .description('Create a new project')
     .action(async () => {
         const config = await requireActiveConfig(true);
@@ -510,8 +505,8 @@ program
         printJSON(result);
     });
 
-program
-    .command('project ls')
+projectCommand
+    .command('ls')
     .description('List all projects for which the user is an admin')
     .action(async () => {
         const config = await requireActiveConfig(true);
@@ -520,8 +515,8 @@ program
         printJSON(result);
     });
 
-program
-    .command('project add-admin <projectId> <identityKey>')
+projectCommand
+    .command('add-admin <projectId> <identityKey>')
     .description('Add an admin to a project')
     .action(async (projectId, identityKey) => {
         const config = await requireActiveConfig(true);
@@ -530,8 +525,8 @@ program
         printJSON(result);
     });
 
-program
-    .command('project remove-admin <projectId> <identityKey>')
+projectCommand
+    .command('remove-admin <projectId> <identityKey>')
     .description('Remove an admin from a project')
     .action(async (projectId, identityKey) => {
         const config = await requireActiveConfig(true);
@@ -540,8 +535,8 @@ program
         printJSON(result);
     });
 
-program
-    .command('project logs <projectId>')
+projectCommand
+    .command('logs <projectId>')
     .description('View logs of a project')
     .action(async (projectId) => {
         const config = await requireActiveConfig(true);
@@ -550,8 +545,8 @@ program
         printJSON(result);
     });
 
-program
-    .command('project deploys <projectId>')
+projectCommand
+    .command('deploys <projectId>')
     .description('List all deployments for a project')
     .action(async (projectId) => {
         const config = await requireActiveConfig(true);
@@ -560,58 +555,29 @@ program
         printJSON(result);
     });
 
-//
-// Deployment Commands
-//
+// Deploy Commands
+const deployCommand = program
+    .command('deploy')
+    .description('Manage deployments');
 
-program
-    .command('deploy <projectId>')
-    .description('Deploy a project')
-    .action(async (projectId) => {
-        const config = await requireActiveConfig(true);
-        const artifactPath = findLatestArtifact();
-
-        // Possibly update config if needed
-        maybeUpdateProjectIdInConfig(config, projectId);
-
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploy`, {});
-        // result should include { url, deploymentId }
-        const spinner = ora('Uploading artifact...').start();
-        const artifactData = fs.readFileSync(artifactPath);
-        try {
-            // The upload endpoint expects a POST request with octet-stream body
-            await axios.post(result.url, artifactData, {
-                headers: {
-                    'Content-Type': 'application/octet-stream'
-                }
-            });
-            spinner.succeed('Artifact uploaded successfully.');
-        } catch (error: any) {
-            spinner.fail('Artifact upload failed.');
-            console.error(error.response?.data || error.message);
-        }
-    });
-
-program
-    .command('deploy get-upload-url <projectId>')
+deployCommand
+    .command('get-upload-url <projectId>')
     .description('Create a new deployment for a project and get the upload URL')
     .action(async (projectId) => {
         const config = await requireActiveConfig(true);
-
         maybeUpdateProjectIdInConfig(config, projectId);
 
         const client = new AuthriteClient(config.cloudUrl);
         const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploy`, {});
-        // result should include { url, deploymentId }
         console.log(`Deployment created. Deployment ID: ${result.deploymentId}`);
         console.log(`Upload URL: ${result.url}`);
     });
 
-program
-    .command('deploy upload-files <uploadURL> <artifactPath>')
+deployCommand
+    .command('upload-files <uploadURL> <artifactPath>')
     .description('Upload a built artifact to the given URL')
     .action(async (uploadURL, artifactPath) => {
+        const { default: ora } = await import('ora');
         await requireActiveConfig(true);
 
         if (!fs.existsSync(artifactPath)) {
@@ -621,7 +587,6 @@ program
         const spinner = ora('Uploading artifact...').start();
         const artifactData = fs.readFileSync(artifactPath);
         try {
-            // The upload endpoint expects a POST request with octet-stream body
             await axios.post(uploadURL, artifactData, {
                 headers: {
                     'Content-Type': 'application/octet-stream'
@@ -634,14 +599,41 @@ program
         }
     });
 
-program
-    .command('deploy logs <deploymentId>')
+deployCommand
+    .command('logs <deploymentId>')
     .description('View logs of a deployment')
     .action(async (deploymentId) => {
         const config = await requireActiveConfig(true);
         const client = new AuthriteClient(config.cloudUrl);
         const result = await client.createSignedRequest(`/api/v1/deploy/${deploymentId}/logs/show`, {});
         printJSON(result);
+    });
+
+deployCommand
+    .command('now <projectId>')
+    .description('Deploy a project artifact directly')
+    .action(async (projectId) => {
+        const { default: ora } = await import('ora');
+        const config = await requireActiveConfig(true);
+        const artifactPath = findLatestArtifact();
+
+        maybeUpdateProjectIdInConfig(config, projectId);
+
+        const client = new AuthriteClient(config.cloudUrl);
+        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploy`, {});
+        const spinner = ora('Uploading artifact...').start();
+        const artifactData = fs.readFileSync(artifactPath);
+        try {
+            await axios.post(result.url, artifactData, {
+                headers: {
+                    'Content-Type': 'application/octet-stream'
+                }
+            });
+            spinner.succeed('Artifact uploaded successfully.');
+        } catch (error: any) {
+            spinner.fail('Artifact upload failed.');
+            console.error(error.response?.data || error.message);
+        }
     });
 
 program.parse(process.argv);
