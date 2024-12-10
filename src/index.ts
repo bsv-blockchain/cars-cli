@@ -685,6 +685,21 @@ projectCommand
     });
 
 projectCommand
+    .command('list-admins [nameOrIndex]')
+    .description('List the admins for the project of the chosen deployment')
+    .action(async (nameOrIndex) => {
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/admins/list`, {});
+        printJSON(result);
+    });
+
+projectCommand
     .command('logs [nameOrIndex]')
     .description('View logs of the project from the chosen deployment')
     .action(async (nameOrIndex) => {
