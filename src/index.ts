@@ -589,6 +589,33 @@ async function getAuthriteClientForConfig(config: CARSConfig) {
 }
 
 /**
+ * helper to pick a release ID from a list if not provided
+ */
+async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Promise<string | undefined> {
+    if (providedReleaseId) {
+        return providedReleaseId;
+    }
+    // Fetch releases
+    const client = await getAuthriteClientForConfig(config);
+    const result = await safeRequest<{ deploys: string[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
+    if (!result || !Array.isArray(result.deploys) || result.deploys.length === 0) {
+        console.log(chalk.yellow('No releases found. Cannot select a release ID.'));
+        return undefined;
+    }
+
+    const { chosenRelease } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'chosenRelease',
+            message: 'Select a release ID:',
+            choices: result.deploys.map(d => ({ name: d, value: d }))
+        }
+    ]);
+
+    return chosenRelease;
+}
+
+/**
  * Interactive Menus
  */
 
@@ -824,10 +851,10 @@ async function releaseMenu() {
     const info = loadCARSConfigInfo();
 
     const choices = [
-        { name: 'Create new release (get upload URL)', value: 'get-upload-url' },
-        { name: 'Upload artifact to a release URL', value: 'upload-files' },
-        { name: 'View release logs', value: 'logs' },
-        { name: 'Create and upload latest artifact now', value: 'now' },
+        { name: 'Auto-create new release and upload latest artifact now', value: 'now' },
+        { name: 'View logs for a release', value: 'logs' },
+        { name: 'Create new release for manual upload (get upload URL)', value: 'get-upload-url' },
+        { name: 'Upload artifact to a manual release URL', value: 'upload-files' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -864,9 +891,16 @@ async function releaseMenu() {
             await uploadArtifact(uploadURL, artifactPath);
         } else if (action === 'logs') {
             const config = await pickCARSConfig(info);
-            const { releaseId } = await inquirer.prompt([
-                { type: 'input', name: 'releaseId', message: 'Enter the Release ID:' }
-            ]);
+            if (!config.projectID) {
+                console.error(chalk.red('❌ No project ID set in this configuration.'));
+                continue;
+            }
+            // Instead of asking for releaseId, we pick from menu
+            const releaseId = await pickReleaseId(config);
+            if (!releaseId) {
+                // No releases available
+                continue;
+            }
             const client = await getAuthriteClientForConfig(config);
             const result = await safeRequest<{ logs: string }>(client, `/api/v1/deploy/${releaseId}/logs/show`, {});
             if (result && typeof result.logs === 'string') {
@@ -1178,13 +1212,21 @@ releaseCommand
     });
 
 releaseCommand
-    .command('logs <releaseId> [nameOrIndex]')
-    .description('View logs of a release by its ID')
+    .command('logs [releaseId] [nameOrIndex]')
+    .description('View logs of a release by its ID. If no releaseId is provided, select from a menu.')
     .action(async (releaseId, nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID set in this configuration.'));
+            process.exit(1);
+        }
+
+        const finalReleaseId = await pickReleaseId(cfg, releaseId);
+        if (!finalReleaseId) return;
+
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ logs: string }>(client, `/api/v1/deploy/${releaseId}/logs/show`, {});
+        const result = await safeRequest<{ logs: string }>(client, `/api/v1/deploy/${finalReleaseId}/logs/show`, {});
         if (result && typeof result.logs === 'string') {
             printReleaseLog(result.logs);
         }
