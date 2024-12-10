@@ -4,11 +4,14 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import * as tar from 'tar';
-import os from 'os';
 import { spawnSync } from 'child_process';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
 import { AuthriteClient } from 'authrite-js';
+
+/**
+ * Types
+ */
 
 interface DeploymentInfo {
     schema: string;
@@ -17,114 +20,109 @@ interface DeploymentInfo {
     lookupServices?: Record<string, { serviceFactory: string; hydrateWith?: string }>;
     frontend?: { language: string; sourceDirectory: string };
     contracts?: { language: string; baseDirectory: string };
+    deployments?: Deployment[];
 }
 
-interface CarsConfigProfile {
+interface Deployment {
     name: string;
-    cloudUrl: string;
-    defaultProjectId?: string;
-    defaultProjectDir?: string;
-    autoSetProjectId?: boolean;
+    network?: string;
+    provider: string; // "CARS" or "LARS" or others
+    projectID?: string;
+    CARSCloudURL?: string;
+    deploy?: string[]; // "frontend", "backend"
+    frontendHostingMethod?: string;
+    authentication?: any;
+    payments?: any;
 }
 
-interface CarsConfigsFile {
-    activeConfigName?: string;
-    configs: CarsConfigProfile[];
-}
+/**
+ * Constants
+ */
 
-const CARS_CONFIG_PATH = path.resolve(os.homedir(), '.cars-config.json');
+const DEPLOYMENT_INFO_PATH = path.resolve(process.cwd(), 'deployment-info.json');
 
-//
-// Utility functions for config management
-//
-function loadConfigsFile(): CarsConfigsFile {
-    if (!fs.existsSync(CARS_CONFIG_PATH)) {
-        return { configs: [] };
+/**
+ * Utility functions
+ */
+
+function loadDeploymentInfo(): DeploymentInfo {
+    if (!fs.existsSync(DEPLOYMENT_INFO_PATH)) {
+        console.error(chalk.red('❌ deployment-info.json not found in the current directory.'));
+        process.exit(1);
     }
-    return JSON.parse(fs.readFileSync(CARS_CONFIG_PATH, 'utf-8'));
+    return JSON.parse(fs.readFileSync(DEPLOYMENT_INFO_PATH, 'utf-8'));
 }
 
-function saveConfigsFile(configsFile: CarsConfigsFile) {
-    fs.writeFileSync(CARS_CONFIG_PATH, JSON.stringify(configsFile, null, 2));
+function saveDeploymentInfo(info: DeploymentInfo) {
+    fs.writeFileSync(DEPLOYMENT_INFO_PATH, JSON.stringify(info, null, 2));
 }
 
-function deleteConfigFile() {
-    if (fs.existsSync(CARS_CONFIG_PATH)) {
-        fs.rmSync(CARS_CONFIG_PATH);
+function getCARSDeployments(info: DeploymentInfo): Deployment[] {
+    return (info.deployments || []).filter(d => d.provider === 'CARS');
+}
+
+function findCARSDeploymentByNameOrIndex(info: DeploymentInfo, nameOrIndex?: string): Deployment | undefined {
+    const carsDeployments = getCARSDeployments(info);
+    if (carsDeployments.length === 0) return undefined;
+
+    if (!nameOrIndex) {
+        // No argument, prompt user
+        return undefined;
     }
-}
 
-function getActiveConfig(): CarsConfigProfile | undefined {
-    const configsFile = loadConfigsFile();
-    if (!configsFile.activeConfigName) return undefined;
-    return configsFile.configs.find(c => c.name === configsFile.activeConfigName);
-}
-
-async function requireActiveConfig(interactive = false): Promise<CarsConfigProfile> {
-    let activeConfig = getActiveConfig();
-    if (!activeConfig) {
-        if (!interactive) {
-            console.error('No active configuration found. Run `cars config create` or `cars config activate <name>` first.');
-            process.exit(1);
-        }
-        // Prompt user to create one if none exists
-        if (loadConfigsFile().configs.length === 0) {
-            console.log('No configurations found. Let’s create one.');
-            await createConfigInteractive();
-        } else {
-            console.log('No active configuration selected. Please activate a configuration using `cars config activate <name>`.');
-            process.exit(1);
-        }
-        activeConfig = getActiveConfig();
-        if (!activeConfig) {
-            console.error('No active configuration after creation. Exiting.');
-            process.exit(1);
-        }
+    const index = parseInt(nameOrIndex, 10);
+    if (!isNaN(index)) {
+        return carsDeployments[index];
     }
-    // Ensure registration with the current cloud URL
-    await ensureRegistered(activeConfig);
-    return activeConfig;
+
+    return carsDeployments.find(d => d.name === nameOrIndex);
 }
 
-async function ensureRegistered(config: CarsConfigProfile) {
-    const client = new AuthriteClient(config.cloudUrl);
+async function pickCARSDeployment(info: DeploymentInfo): Promise<Deployment> {
+    const carsDeployments = getCARSDeployments(info);
+    if (carsDeployments.length === 0) {
+        console.log(chalk.yellow('No CARS deployments found. Let’s create one.'));
+        const newDep = await addCARSDeploymentInteractive(info);
+        return newDep;
+    }
+
+    const choices = carsDeployments.map((d, i) => ({
+        name: `${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL}, projectID: ${d.projectID || 'none'})`,
+        value: i
+    }));
+
+    const { chosenIndex } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'chosenIndex',
+            message: 'Select a CARS deployment:',
+            choices
+        }
+    ]);
+
+    return carsDeployments[chosenIndex];
+}
+
+async function ensureRegistered(carsDeployment: Deployment) {
+    if (!carsDeployment.CARSCloudURL) {
+        console.error(chalk.red('❌ No CARS Cloud URL set in the chosen deployment.'));
+        process.exit(1);
+    }
+    const client = new AuthriteClient(carsDeployment.CARSCloudURL);
     try {
         await client.createSignedRequest('/api/v1/register', {});
     } catch (error: any) {
-        console.error(`Failed to register with CARS Cloud at ${config.cloudUrl}.`);
+        console.error(chalk.red(`❌ Failed to register with CARS Cloud at ${carsDeployment.CARSCloudURL}.`));
         console.error(error.response?.data || error.message);
         process.exit(1);
     }
 }
 
-function updateActiveConfig(updatedConfig: CarsConfigProfile) {
-    const configsFile = loadConfigsFile();
-    const idx = configsFile.configs.findIndex(c => c.name === updatedConfig.name);
-    if (idx === -1) {
-        console.error('Active config not found while updating.');
-        process.exit(1);
-    }
-    configsFile.configs[idx] = updatedConfig;
-    saveConfigsFile(configsFile);
-}
+/**
+ * Interactive editing of deployments
+ */
 
-function setActiveConfig(name: string) {
-    const configsFile = loadConfigsFile();
-    const config = configsFile.configs.find(c => c.name === name);
-    if (!config) {
-        console.error(`Configuration with name "${name}" not found.`);
-        process.exit(1);
-    }
-    configsFile.activeConfigName = name;
-    saveConfigsFile(configsFile);
-}
-
-async function createConfigInteractive(name?: string) {
-    const configsFile = loadConfigsFile();
-    if (!name) {
-        name = generateUniqueConfigName(configsFile);
-    }
-
+async function addCARSDeploymentInteractive(info: DeploymentInfo): Promise<Deployment> {
     const cloudChoices = [
         { name: 'localhost:7777', value: 'http://localhost:7777' },
         { name: 'cars-cloud1.com', value: 'https://cars-cloud1.com' },
@@ -133,7 +131,13 @@ async function createConfigInteractive(name?: string) {
         { name: 'Custom', value: 'custom' }
     ];
 
-    const answers = await inquirer.prompt([
+    const { name, cloudUrlChoice, customCloudUrl, projectID, network, deployTargets, frontendHosting } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'name',
+            message: 'Name of this CARS deployment:',
+            validate: (val: string) => val.trim() ? true : 'Name is required.'
+        },
         {
             type: 'list',
             name: 'cloudUrlChoice',
@@ -148,42 +152,59 @@ async function createConfigInteractive(name?: string) {
             default: 'http://localhost:7777'
         },
         {
-            type: 'confirm',
-            name: 'autoSetProjectId',
-            message: 'Auto-set project ID for this config based on directory when building and deploying?',
-            default: true
+            type: 'input',
+            name: 'projectID',
+            message: 'Project ID for this deployment:',
+            validate: (val: string) => val.trim() ? true : 'Project ID is required.'
+        },
+        {
+            type: 'input',
+            name: 'network',
+            message: 'Network (e.g. testnet/mainnet):',
+            default: 'mainnet'
+        },
+        {
+            type: 'checkbox',
+            name: 'deployTargets',
+            message: 'Select what to deploy:',
+            choices: [
+                { name: 'frontend', value: 'frontend', checked: true },
+                { name: 'backend', value: 'backend', checked: true },
+            ]
+        },
+        {
+            type: 'list',
+            name: 'frontendHosting',
+            message: 'Frontend hosting method (HTTPS/UHRP/none):',
+            choices: ['HTTPS', 'UHRP', 'none'],
+            default: 'HTTPS'
         }
     ]);
 
-    const finalCloudUrl = answers.cloudUrlChoice === 'custom' ? answers.customCloudUrl : answers.cloudUrlChoice;
+    const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
 
-    const newConfig: CarsConfigProfile = {
+    const newDep: Deployment = {
         name,
-        cloudUrl: finalCloudUrl,
-        autoSetProjectId: answers.autoSetProjectId
+        provider: 'CARS',
+        CARSCloudURL: finalCloudUrl,
+        projectID: projectID.trim(),
+        network: network.trim(),
+        deploy: deployTargets,
+        frontendHostingMethod: frontendHosting === 'none' ? undefined : frontendHosting
     };
 
-    configsFile.configs.push(newConfig);
-    // If no active config, set this one as active
-    if (!configsFile.activeConfigName) {
-        configsFile.activeConfigName = name;
-    }
-    saveConfigsFile(configsFile);
+    info.deployments = info.deployments || [];
+    info.deployments.push(newDep);
+    saveDeploymentInfo(info);
 
     // Attempt registration
-    await ensureRegistered(newConfig);
+    await ensureRegistered(newDep);
 
-    console.log(`Configuration "${name}" created and activated.`);
+    console.log(chalk.green(`✅ CARS deployment "${name}" created.`));
+    return newDep;
 }
 
-async function editConfigInteractive(name: string) {
-    const configsFile = loadConfigsFile();
-    const config = configsFile.configs.find(c => c.name === name);
-    if (!config) {
-        console.error(`No configuration named "${name}" found.`);
-        process.exit(1);
-    }
-
+async function editCARSDeploymentInteractive(info: DeploymentInfo, deployment: Deployment) {
     const cloudChoices = [
         { name: 'localhost:7777', value: 'http://localhost:7777' },
         { name: 'cars-cloud1.com', value: 'https://cars-cloud1.com' },
@@ -192,13 +213,20 @@ async function editConfigInteractive(name: string) {
         { name: 'Custom', value: 'custom' }
     ];
 
-    const currentCloudChoice = cloudChoices.find(ch => ch.value === config.cloudUrl) ? config.cloudUrl : 'custom';
+    const currentCloudChoice = cloudChoices.find(ch => ch.value === deployment.CARSCloudURL) ? deployment.CARSCloudURL : 'custom';
 
-    const answers = await inquirer.prompt([
+    const { name, cloudUrlChoice, customCloudUrl, projectID, network, deployTargets, frontendHosting } = await inquirer.prompt([
+        {
+            type: 'input',
+            name: 'name',
+            message: 'Deployment name:',
+            default: deployment.name,
+            validate: (val: string) => val.trim() ? true : 'Name is required.'
+        },
         {
             type: 'list',
             name: 'cloudUrlChoice',
-            message: 'Select a CARS Cloud URL:',
+            message: 'CARS Cloud URL:',
             choices: cloudChoices,
             default: currentCloudChoice
         },
@@ -207,150 +235,77 @@ async function editConfigInteractive(name: string) {
             name: 'customCloudUrl',
             message: 'Enter custom CARS Cloud URL:',
             when: (ans) => ans.cloudUrlChoice === 'custom',
-            default: config.cloudUrl
+            default: deployment.CARSCloudURL || 'http://localhost:7777'
         },
         {
             type: 'input',
-            name: 'defaultProjectId',
-            message: 'Default Project ID:',
-            default: config.defaultProjectId
+            name: 'projectID',
+            message: 'Project ID:',
+            default: deployment.projectID,
+            validate: (val: string) => val.trim() ? true : 'Project ID is required.'
         },
         {
             type: 'input',
-            name: 'defaultProjectDir',
-            message: 'Default Project Directory:',
-            default: config.defaultProjectDir || process.cwd()
+            name: 'network',
+            message: 'Network:',
+            default: deployment.network || 'testnet'
         },
         {
-            type: 'confirm',
-            name: 'autoSetProjectId',
-            message: 'Enable autoSetProjectId?',
-            default: config.autoSetProjectId !== false
+            type: 'checkbox',
+            name: 'deployTargets',
+            message: 'What to deploy?',
+            choices: [
+                { name: 'frontend', value: 'frontend', checked: deployment.deploy?.includes('frontend') },
+                { name: 'backend', value: 'backend', checked: deployment.deploy?.includes('backend') },
+            ]
+        },
+        {
+            type: 'list',
+            name: 'frontendHosting',
+            message: 'Frontend hosting method:',
+            choices: ['HTTPS', 'UHRP', 'none'],
+            default: deployment.frontendHostingMethod || 'none'
         }
     ]);
 
-    const finalCloudUrl = answers.cloudUrlChoice === 'custom' ? answers.customCloudUrl : answers.cloudUrlChoice;
+    const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
 
-    config.cloudUrl = finalCloudUrl;
-    config.defaultProjectId = answers.defaultProjectId || undefined;
-    config.defaultProjectDir = answers.defaultProjectDir || undefined;
-    config.autoSetProjectId = answers.autoSetProjectId;
+    deployment.name = name.trim();
+    deployment.CARSCloudURL = finalCloudUrl;
+    deployment.projectID = projectID.trim();
+    deployment.network = network.trim();
+    deployment.deploy = deployTargets;
+    deployment.frontendHostingMethod = frontendHosting === 'none' ? undefined : frontendHosting;
 
-    saveConfigsFile(configsFile);
+    saveDeploymentInfo(info);
 
-    // Attempt registration
-    await ensureRegistered(config);
+    await ensureRegistered(deployment);
 
-    console.log(`Configuration "${name}" updated.`);
+    console.log(chalk.green(`✅ CARS deployment "${name}" updated.`));
 }
 
-function deleteConfig(name: string) {
-    const configsFile = loadConfigsFile();
-    const idx = configsFile.configs.findIndex(c => c.name === name);
-    if (idx === -1) {
-        console.error(`Configuration "${name}" not found.`);
-        process.exit(1);
-    }
-    configsFile.configs.splice(idx, 1);
-
-    // If this was the active config, try to pick another one
-    if (configsFile.activeConfigName === name) {
-        if (configsFile.configs.length > 0) {
-            configsFile.activeConfigName = configsFile.configs[0].name;
-        } else {
-            delete configsFile.activeConfigName;
-        }
-    }
-
-    saveConfigsFile(configsFile);
-    console.log(`Configuration "${name}" deleted.`);
+function deleteCARSDeployment(info: DeploymentInfo, deployment: Deployment) {
+    info.deployments = (info.deployments || []).filter(d => d !== deployment);
+    saveDeploymentInfo(info);
+    console.log(chalk.green(`✅ CARS deployment "${deployment.name}" deleted.`));
 }
 
-function listConfigs() {
-    const configsFile = loadConfigsFile();
-    if (configsFile.configs.length === 0) {
-        console.log('No configurations found.');
-        return;
-    }
+/**
+ * Build logic
+ */
 
-    const activeName = configsFile.activeConfigName;
-    console.log('Configurations:');
-    configsFile.configs.forEach(c => {
-        const prefix = c.name === activeName ? '*' : ' ';
-        console.log(`${prefix} ${c.name} (cloudUrl: ${c.cloudUrl}, defaultProjectId: ${c.defaultProjectId || 'none'}, defaultProjectDir: ${c.defaultProjectDir || 'none'})`);
-    });
-}
-
-function generateUniqueConfigName(configsFile: CarsConfigsFile): string {
-    let base = 'cars-config';
-    let i = 1;
-    let name = base;
-    while (configsFile.configs.find(c => c.name === name)) {
-        name = base + '-' + i++;
-    }
-    return name;
-}
-
-//
-// Setting and getting config values
-//
-function getConfigValue(key: string) {
-    const config = getActiveConfig();
-    if (!config) {
-        console.error('No active configuration.');
-        process.exit(1);
-    }
-    if (!(key in config)) {
-        console.error(`Key "${key}" not found in active configuration.`);
-        process.exit(1);
-    }
-    // @ts-ignore
-    console.log(config[key]);
-}
-
-async function setConfigValue(key: string, value: string) {
-    const config = getActiveConfig();
-    if (!config) {
-        console.error('No active configuration.');
-        process.exit(1);
-    }
-    if (!['cloudUrl', 'defaultProjectId', 'defaultProjectDir', 'autoSetProjectId'].includes(key)) {
-        console.error(`Invalid key "${key}". Valid keys: cloudUrl, defaultProjectId, defaultProjectDir, autoSetProjectId`);
-        process.exit(1);
-    }
-
-    if (key === 'autoSetProjectId') {
-        const boolVal = value.toLowerCase() === 'true';
-        config.autoSetProjectId = boolVal;
-    } else {
-        // @ts-ignore
-        config[key] = value;
-    }
-
-    updateActiveConfig(config);
-
-    if (key === 'cloudUrl') {
-        await ensureRegistered(config);
-    }
-
-    console.log(`Set "${key}" to "${value}" in the active configuration.`);
-}
-
-//
-// Project logic
-//
 async function buildArtifact() {
     if (!fs.existsSync('deployment-info.json')) {
-        console.error('No deployment-info.json found in current directory.');
+        console.error(chalk.red('❌ No deployment-info.json found in current directory.'));
         process.exit(1);
     }
     const deploymentInfo: DeploymentInfo = JSON.parse(fs.readFileSync('deployment-info.json', 'utf-8'));
     if (deploymentInfo.schema !== 'bsv-app') {
-        console.error('Invalid schema in deployment-info.json');
+        console.error(chalk.red('❌ Invalid schema in deployment-info.json'));
         process.exit(1);
     }
 
-    console.log('Building local project artifact...');
+    console.log(chalk.blue('🛠  Building local project artifact...'));
     const artifactName = `cars_artifact_${Date.now()}.tgz`;
     spawnSync('npm', ['i'], { stdio: 'inherit' });
     if (fs.existsSync('backend/package.json')) {
@@ -362,11 +317,10 @@ async function buildArtifact() {
         spawnSync('npm', ['i'], { cwd: 'frontend', stdio: 'inherit' });
         spawnSync('npm', ['run', 'build'], { cwd: 'frontend', stdio: 'inherit' });
     }
-    await tar.create(
-        { gzip: true, file: artifactName },
-        ['backend', 'frontend', 'deployment-info.json', 'package.json', 'package-lock.json'].filter(fs.existsSync)
-    );
-    console.log(chalk.green(`Artifact created: ${artifactName}`));
+
+    const filesToInclude = ['backend', 'frontend', 'deployment-info.json', 'package.json', 'package-lock.json'].filter(fs.existsSync);
+    await tar.create({ gzip: true, file: artifactName }, filesToInclude);
+    console.log(chalk.green(`✅ Artifact created: ${artifactName}`));
     return artifactName;
 }
 
@@ -377,7 +331,7 @@ function findLatestArtifact(): string {
     const artifacts = fs.readdirSync(process.cwd()).filter(f => f.startsWith('cars_artifact_') && f.endsWith('.tgz'));
     const found = artifacts.sort().pop();
     if (!found) {
-        console.error('No artifact, run `cars build` first.')
+        console.error(chalk.red('❌ No artifact found. Run `cars build` first.'));
         process.exit(1);
     }
     return found;
@@ -390,186 +344,277 @@ function printJSON(obj: any) {
     console.log(JSON.stringify(obj, null, 2));
 }
 
-//
-// Handling projectId inference
-//
-function maybeUpdateProjectIdInConfig(config: CarsConfigProfile, projectId: string) {
-    if (config.autoSetProjectId !== false) {
-        if (!config.defaultProjectDir) {
-            config.defaultProjectDir = process.cwd();
-            updateActiveConfig(config);
-        }
+/**
+ * Project commands
+ */
 
-        if (config.defaultProjectDir === process.cwd() && config.defaultProjectId !== projectId) {
-            config.defaultProjectId = projectId;
-            updateActiveConfig(config);
-        }
+async function getAuthriteClientForDeployment(deployment: Deployment) {
+    if (!deployment.CARSCloudURL) {
+        console.error(chalk.red('❌ CARSCloudURL not set on this deployment.'));
+        process.exit(1);
     }
+    await ensureRegistered(deployment);
+    return new AuthriteClient(deployment.CARSCloudURL);
 }
 
-//
-// CLI definition
-//
-program.name('cars').description('CARS CLI').version('1.0.0');
+/**
+ * CLI Definition
+ */
 
-// Config Commands
+// cars config
 const configCommand = program
     .command('config')
-    .description('Manage configuration profiles');
+    .description('Manage CARS deployments in deployment-info.json');
 
 configCommand
-    .command('create [name]')
-    .description('Create a new configuration profile')
-    .action(async (name) => {
-        await createConfigInteractive(name);
-    });
-
-configCommand
-    .command('list')
-    .description('List all configuration profiles')
+    .command('ls')
+    .description('List all CARS deployments')
     .action(() => {
-        listConfigs();
+        const info = loadDeploymentInfo();
+        const cars = getCARSDeployments(info);
+        if (cars.length === 0) {
+            console.log(chalk.yellow('No CARS deployments found.'));
+            return;
+        }
+        console.log(chalk.blue('CARS deployments:'));
+        cars.forEach((c, i) => {
+            console.log(`${i}: ${c.name} (CARSCloudURL: ${c.CARSCloudURL}, projectID: ${c.projectID || 'none'})`);
+        });
     });
 
 configCommand
-    .command('activate <name>')
-    .description('Activate a configuration profile')
-    .action(async (name) => {
-        setActiveConfig(name);
-        const config = getActiveConfig();
-        if (!config) {
-            console.error('Failed to activate configuration.');
+    .command('add')
+    .description('Add a new CARS deployment')
+    .action(async () => {
+        const info = loadDeploymentInfo();
+        await addCARSDeploymentInteractive(info);
+    });
+
+configCommand
+    .command('edit <nameOrIndex>')
+    .description('Edit a CARS deployment')
+    .action(async (nameOrIndex) => {
+        const info = loadDeploymentInfo();
+        const dep = findCARSDeploymentByNameOrIndex(info, nameOrIndex);
+        if (!dep) {
+            console.error(chalk.red(`❌ CARS deployment "${nameOrIndex}" not found.`));
             process.exit(1);
         }
-        await ensureRegistered(config);
-        console.log(`Configuration "${name}" is now active.`);
+        await editCARSDeploymentInteractive(info, dep);
     });
 
 configCommand
-    .command('edit <name>')
-    .description('Edit a configuration profile')
-    .action(async (name) => {
-        await editConfigInteractive(name);
+    .command('delete <nameOrIndex>')
+    .description('Delete a CARS deployment')
+    .action((nameOrIndex) => {
+        const info = loadDeploymentInfo();
+        const dep = findCARSDeploymentByNameOrIndex(info, nameOrIndex);
+        if (!dep) {
+            console.error(chalk.red(`❌ CARS deployment "${nameOrIndex}" not found.`));
+            process.exit(1);
+        }
+        deleteCARSDeployment(info, dep);
     });
 
 configCommand
-    .command('delete <name>')
-    .description('Delete a configuration profile')
-    .action((name) => {
-        deleteConfig(name);
+    .action(async () => {
+        // Interactive menu to manage deployments
+        const info = loadDeploymentInfo();
+        const carsDeployments = getCARSDeployments(info);
+
+        const mainChoices = [
+            { name: 'List CARS deployments', value: 'ls' },
+            { name: 'Add a new CARS deployment', value: 'add' }
+        ];
+
+        if (carsDeployments.length > 0) {
+            mainChoices.push({ name: 'Edit an existing CARS deployment', value: 'edit' });
+            mainChoices.push({ name: 'Delete a CARS deployment', value: 'delete' });
+        }
+
+        mainChoices.push({ name: 'Exit', value: 'exit' });
+
+        let done = false;
+        while (!done) {
+            const { action } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'action',
+                    message: 'CARS Configuration Menu',
+                    choices: mainChoices
+                }
+            ]);
+
+            if (action === 'ls') {
+                console.log(chalk.blue('CARS deployments:'));
+                const cars = getCARSDeployments(info);
+                if (cars.length === 0) {
+                    console.log(chalk.yellow('No CARS deployments found.'));
+                } else {
+                    cars.forEach((c, i) => {
+                        console.log(`${i}: ${c.name} (CARSCloudURL: ${c.CARSCloudURL}, projectID: ${c.projectID})`);
+                    });
+                }
+            } else if (action === 'add') {
+                await addCARSDeploymentInteractive(info);
+            } else if (action === 'edit') {
+                const cars = getCARSDeployments(info);
+                if (cars.length === 0) {
+                    console.log(chalk.yellow('No CARS deployments to edit.'));
+                } else {
+                    const { chosenIndex } = await inquirer.prompt([
+                        {
+                            type: 'list',
+                            name: 'chosenIndex',
+                            message: 'Select a CARS deployment to edit:',
+                            choices: cars.map((d, i) => ({
+                                name: `${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL})`,
+                                value: i
+                            }))
+                        }
+                    ]);
+                    await editCARSDeploymentInteractive(info, cars[chosenIndex]);
+                }
+            } else if (action === 'delete') {
+                const cars = getCARSDeployments(info);
+                if (cars.length === 0) {
+                    console.log(chalk.yellow('No CARS deployments to delete.'));
+                } else {
+                    const { chosenIndex } = await inquirer.prompt([
+                        {
+                            type: 'list',
+                            name: 'chosenIndex',
+                            message: 'Select a CARS deployment to delete:',
+                            choices: cars.map((d, i) => ({
+                                name: `${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL})`,
+                                value: i
+                            }))
+                        }
+                    ]);
+                    deleteCARSDeployment(info, cars[chosenIndex]);
+                }
+            } else {
+                done = true;
+            }
+        }
     });
 
-configCommand
-    .command('get <key>')
-    .description('Get a value from the currently-active config')
-    .action((key) => {
-        getConfigValue(key);
-    });
-
-configCommand
-    .command('set <key> <value>')
-    .description('Set a value in the currently-active config')
-    .action(async (key, value) => {
-        await setConfigValue(key, value);
-    });
-
-configCommand
-    .command('reset')
-    .description('Reset your CARS configurations (delete all).')
-    .action(() => {
-        deleteConfigFile();
-        console.log('CARS configs deleted.');
-    });
-
-// Build command (top-level)
+// build
 program
     .command('build')
     .description('Build local artifact for deployment')
     .action(async () => {
-        await requireActiveConfig(true);
         await buildArtifact();
     });
 
-// Project Commands
+// project
 const projectCommand = program
     .command('project')
-    .description('Manage projects');
+    .description('Manage projects via CARS');
 
 projectCommand
     .command('create')
-    .description('Create a new project')
+    .description('Create a new project on a chosen CARS deployment')
     .action(async () => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info);
+        const client = await getAuthriteClientForDeployment(deployment);
         const result = await client.createSignedRequest('/api/v1/project/create', {});
         printJSON(result);
     });
 
 projectCommand
     .command('ls')
-    .description('List all projects for which the user is an admin')
+    .description('List all projects (for the chosen CARS deployment)')
     .action(async () => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info);
+        const client = await getAuthriteClientForDeployment(deployment);
         const result = await client.createSignedRequest('/api/v1/projects/list', {});
         printJSON(result);
     });
 
 projectCommand
-    .command('add-admin <projectId> <identityKey>')
-    .description('Add an admin to a project')
-    .action(async (projectId, identityKey) => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/addAdmin`, { identityKey });
+    .command('add-admin <identityKey>')
+    .description('Add an admin to the project')
+    .action(async (identityKey) => {
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info);
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/addAdmin`, { identityKey });
         printJSON(result);
     });
 
 projectCommand
-    .command('remove-admin <projectId> <identityKey>')
-    .description('Remove an admin from a project')
-    .action(async (projectId, identityKey) => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/removeAdmin`, { identityKey });
+    .command('remove-admin <identityKey>')
+    .description('Remove an admin from the project')
+    .action(async (identityKey) => {
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info);
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/removeAdmin`, { identityKey });
         printJSON(result);
     });
 
 projectCommand
-    .command('logs <projectId>')
-    .description('View logs of a project')
-    .action(async (projectId) => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/logs/show`, {});
+    .command('logs')
+    .description('View logs of the project')
+    .action(async () => {
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info);
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/logs/show`, {});
         printJSON(result);
     });
 
 projectCommand
-    .command('deploys <projectId>')
-    .description('List all deployments for a project')
-    .action(async (projectId) => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploys/list`, {});
+    .command('deploys')
+    .description('List all deployments for the project')
+    .action(async () => {
+        const info = loadDeploymentInfo();
+        const deployment = await pickCARSDeployment(info);
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/deploys/list`, {});
         printJSON(result);
     });
 
-// Deploy Commands
+// deploy
 const deployCommand = program
     .command('deploy')
-    .description('Manage deployments');
+    .description('Manage deployments via CARS');
 
 deployCommand
-    .command('get-upload-url <projectId>')
-    .description('Create a new deployment for a project and get the upload URL')
-    .action(async (projectId) => {
-        const config = await requireActiveConfig(true);
-        maybeUpdateProjectIdInConfig(config, projectId);
+    .command('get-upload-url [nameOrIndex]')
+    .description('Create a new deployment for a chosen CARS deployment and get the upload URL')
+    .action(async (nameOrIndex) => {
+        const info = loadDeploymentInfo();
+        const deployment = nameOrIndex
+            ? findCARSDeploymentByNameOrIndex(info, nameOrIndex) || (await pickCARSDeployment(info))
+            : await pickCARSDeployment(info);
 
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploy`, {});
-        console.log(`Deployment created. Deployment ID: ${result.deploymentId}`);
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/deploy`, {});
+        console.log(chalk.green(`✅ Deployment created. Deployment ID: ${result.deploymentId}`));
         console.log(`Upload URL: ${result.url}`);
     });
 
@@ -578,10 +623,8 @@ deployCommand
     .description('Upload a built artifact to the given URL')
     .action(async (uploadURL, artifactPath) => {
         const { default: ora } = await import('ora');
-        await requireActiveConfig(true);
-
         if (!fs.existsSync(artifactPath)) {
-            console.error(`Artifact not found: ${artifactPath}`);
+            console.error(chalk.red(`❌ Artifact not found: ${artifactPath}`));
             process.exit(1);
         }
         const spinner = ora('Uploading artifact...').start();
@@ -592,35 +635,45 @@ deployCommand
                     'Content-Type': 'application/octet-stream'
                 }
             });
-            spinner.succeed('Artifact uploaded successfully.');
+            spinner.succeed('✅ Artifact uploaded successfully.');
         } catch (error: any) {
-            spinner.fail('Artifact upload failed.');
+            spinner.fail('❌ Artifact upload failed.');
             console.error(error.response?.data || error.message);
+            process.exit(1);
         }
     });
 
 deployCommand
-    .command('logs <deploymentId>')
-    .description('View logs of a deployment')
-    .action(async (deploymentId) => {
-        const config = await requireActiveConfig(true);
-        const client = new AuthriteClient(config.cloudUrl);
+    .command('logs <deploymentId> [nameOrIndex]')
+    .description('View logs of a deployment by its ID')
+    .action(async (deploymentId, nameOrIndex) => {
+        const info = loadDeploymentInfo();
+        const deployment = nameOrIndex
+            ? findCARSDeploymentByNameOrIndex(info, nameOrIndex) || (await pickCARSDeployment(info))
+            : await pickCARSDeployment(info);
+        const client = await getAuthriteClientForDeployment(deployment);
         const result = await client.createSignedRequest(`/api/v1/deploy/${deploymentId}/logs/show`, {});
         printJSON(result);
     });
 
 deployCommand
-    .command('now <projectId>')
-    .description('Deploy a project artifact directly')
-    .action(async (projectId) => {
+    .command('now [nameOrIndex]')
+    .description('Build and deploy the latest artifact directly to the chosen CARS deployment')
+    .action(async (nameOrIndex) => {
         const { default: ora } = await import('ora');
-        const config = await requireActiveConfig(true);
+        const info = loadDeploymentInfo();
+        const deployment = nameOrIndex
+            ? findCARSDeploymentByNameOrIndex(info, nameOrIndex) || (await pickCARSDeployment(info))
+            : await pickCARSDeployment(info);
+
+        if (!deployment.projectID) {
+            console.error(chalk.red('❌ No project ID set in this deployment.'));
+            process.exit(1);
+        }
+
         const artifactPath = findLatestArtifact();
-
-        maybeUpdateProjectIdInConfig(config, projectId);
-
-        const client = new AuthriteClient(config.cloudUrl);
-        const result = await client.createSignedRequest(`/api/v1/project/${projectId}/deploy`, {});
+        const client = await getAuthriteClientForDeployment(deployment);
+        const result = await client.createSignedRequest(`/api/v1/project/${deployment.projectID}/deploy`, {});
         const spinner = ora('Uploading artifact...').start();
         const artifactData = fs.readFileSync(artifactPath);
         try {
@@ -629,10 +682,11 @@ deployCommand
                     'Content-Type': 'application/octet-stream'
                 }
             });
-            spinner.succeed('Artifact uploaded successfully.');
+            spinner.succeed('✅ Artifact uploaded successfully.');
         } catch (error: any) {
-            spinner.fail('Artifact upload failed.');
+            spinner.fail('❌ Artifact upload failed.');
             console.error(error.response?.data || error.message);
+            process.exit(1);
         }
     });
 
