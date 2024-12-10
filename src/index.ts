@@ -57,39 +57,71 @@ function saveDeploymentInfo(info: DeploymentInfo) {
     fs.writeFileSync(DEPLOYMENT_INFO_PATH, JSON.stringify(info, null, 2));
 }
 
-function getCARSDeployments(info: DeploymentInfo): Deployment[] {
-    return (info.deployments || []).filter(d => d.provider === 'CARS');
+function isCARSDeployment(d: Deployment): boolean {
+    return d.provider === 'CARS';
 }
 
-function findCARSDeploymentByNameOrIndex(info: DeploymentInfo, nameOrIndex?: string): Deployment | undefined {
-    const carsDeployments = getCARSDeployments(info);
-    if (carsDeployments.length === 0) return undefined;
+function listAllDeployments(info: DeploymentInfo): Deployment[] {
+    return info.deployments || [];
+}
 
-    if (!nameOrIndex) {
-        // No argument, prompt user
-        return undefined;
+function printAllDeploymentsWithIndex(info: DeploymentInfo) {
+    const all = listAllDeployments(info);
+    if (all.length === 0) {
+        console.log(chalk.yellow('No deployments found.'));
+        return;
     }
+    console.log(chalk.blue('All deployments:'));
+    all.forEach((d, i) => {
+        if (isCARSDeployment(d)) {
+            console.log(`${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL}, projectID: ${d.projectID || 'none'})`);
+        } else {
+            console.log(chalk.grey(`${i}: ${d.name} (Provider: ${d.provider}, Non-CARS)`));
+        }
+    });
+}
 
+function findDeploymentByNameOrIndex(info: DeploymentInfo, nameOrIndex: string): Deployment | undefined {
+    const all = listAllDeployments(info);
+    // Try index
     const index = parseInt(nameOrIndex, 10);
-    if (!isNaN(index)) {
-        return carsDeployments[index];
+    if (!isNaN(index) && index >= 0 && index < all.length) {
+        return all[index];
     }
-
-    return carsDeployments.find(d => d.name === nameOrIndex);
+    // Try name match
+    return all.find(d => d.name === nameOrIndex);
 }
 
-async function pickCARSDeployment(info: DeploymentInfo): Promise<Deployment> {
-    const carsDeployments = getCARSDeployments(info);
+async function pickCARSDeployment(info: DeploymentInfo, nameOrIndex?: string): Promise<Deployment> {
+    const all = listAllDeployments(info);
+    const carsDeployments = all.filter(isCARSDeployment);
+
+    if (nameOrIndex) {
+        const dep = findDeploymentByNameOrIndex(info, nameOrIndex);
+        if (!dep) {
+            console.error(chalk.red(`❌ Deployment "${nameOrIndex}" not found.`));
+            process.exit(1);
+        }
+        if (!isCARSDeployment(dep)) {
+            console.error(chalk.red(`❌ Deployment "${nameOrIndex}" is not a CARS deployment.`));
+            process.exit(1);
+        }
+        return dep;
+    }
+
     if (carsDeployments.length === 0) {
         console.log(chalk.yellow('No CARS deployments found. Let’s create one.'));
         const newDep = await addCARSDeploymentInteractive(info);
         return newDep;
     }
 
-    const choices = carsDeployments.map((d, i) => ({
-        name: `${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL}, projectID: ${d.projectID || 'none'})`,
-        value: i
-    }));
+    const choices = carsDeployments.map((d, i) => {
+        const indexInAll = all.indexOf(d);
+        return {
+            name: `${indexInAll}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL}, projectID: ${d.projectID || 'none'})`,
+            value: indexInAll
+        };
+    });
 
     const { chosenIndex } = await inquirer.prompt([
         {
@@ -100,7 +132,7 @@ async function pickCARSDeployment(info: DeploymentInfo): Promise<Deployment> {
         }
     ]);
 
-    return carsDeployments[chosenIndex];
+    return all[chosenIndex];
 }
 
 async function ensureRegistered(carsDeployment: Deployment) {
@@ -119,6 +151,61 @@ async function ensureRegistered(carsDeployment: Deployment) {
 }
 
 /**
+ * Project and Deployment Setup Helpers
+ */
+
+async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: string): Promise<string> {
+    const client = new AuthriteClient(cloudUrl);
+    await ensureRegistered({ provider: 'CARS', CARSCloudURL: cloudUrl, name: 'CARS' });
+
+    const { action } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'action',
+            message: 'Project ID configuration:',
+            choices: [
+                { name: 'Use existing project ID', value: 'existing' },
+                { name: 'Create a new project on this CARS Cloud', value: 'new' }
+            ],
+            default: currentProjectID ? 'existing' : 'new'
+        }
+    ]);
+
+    if (action === 'existing') {
+        const { projectID } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'projectID',
+                message: 'Enter existing Project ID:',
+                default: currentProjectID,
+                validate: (val: string) => val.trim() ? true : 'Project ID is required.'
+            }
+        ]);
+        // Validate this project ID by listing projects
+        const projects = await client.createSignedRequest('/api/v1/projects/list', {});
+        if (!projects || !projects.projects || !Array.isArray(projects.projects)) {
+            console.error(chalk.red('❌ Failed to retrieve projects from CARS Cloud.'));
+            process.exit(1);
+        }
+        const found = projects.projects.find((p: any) => p.projectId === projectID.trim());
+        if (!found) {
+            console.error(chalk.red(`❌ Project ID "${projectID}" not found on server ${cloudUrl}.`));
+            process.exit(1);
+        }
+        return projectID.trim();
+    } else {
+        // Create new project
+        const result = await client.createSignedRequest('/api/v1/project/create', {});
+        if (!result.projectId) {
+            console.error(chalk.red('❌ Failed to create new project. No projectId returned.'));
+            process.exit(1);
+        }
+        console.log(chalk.green(`✅ New project created with ID: ${result.projectId}`));
+        return result.projectId;
+    }
+}
+
+/**
  * Interactive editing of deployments
  */
 
@@ -131,7 +218,7 @@ async function addCARSDeploymentInteractive(info: DeploymentInfo): Promise<Deplo
         { name: 'Custom', value: 'custom' }
     ];
 
-    const { name, cloudUrlChoice, customCloudUrl, projectID, network, deployTargets, frontendHosting } = await inquirer.prompt([
+    const { name, cloudUrlChoice, customCloudUrl, network, deployTargets, frontendHosting } = await inquirer.prompt([
         {
             type: 'input',
             name: 'name',
@@ -150,12 +237,6 @@ async function addCARSDeploymentInteractive(info: DeploymentInfo): Promise<Deplo
             message: 'Enter custom CARS Cloud URL:',
             when: (ans) => ans.cloudUrlChoice === 'custom',
             default: 'http://localhost:7777'
-        },
-        {
-            type: 'input',
-            name: 'projectID',
-            message: 'Project ID for this deployment:',
-            validate: (val: string) => val.trim() ? true : 'Project ID is required.'
         },
         {
             type: 'input',
@@ -183,11 +264,14 @@ async function addCARSDeploymentInteractive(info: DeploymentInfo): Promise<Deplo
 
     const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
 
+    // Prompt for or create project ID
+    const projectID = await chooseOrCreateProjectID(finalCloudUrl);
+
     const newDep: Deployment = {
         name,
         provider: 'CARS',
         CARSCloudURL: finalCloudUrl,
-        projectID: projectID.trim(),
+        projectID: projectID,
         network: network.trim(),
         deploy: deployTargets,
         frontendHostingMethod: frontendHosting === 'none' ? undefined : frontendHosting
@@ -215,7 +299,7 @@ async function editCARSDeploymentInteractive(info: DeploymentInfo, deployment: D
 
     const currentCloudChoice = cloudChoices.find(ch => ch.value === deployment.CARSCloudURL) ? deployment.CARSCloudURL : 'custom';
 
-    const { name, cloudUrlChoice, customCloudUrl, projectID, network, deployTargets, frontendHosting } = await inquirer.prompt([
+    const { name, cloudUrlChoice, customCloudUrl, network, deployTargets, frontendHosting } = await inquirer.prompt([
         {
             type: 'input',
             name: 'name',
@@ -236,13 +320,6 @@ async function editCARSDeploymentInteractive(info: DeploymentInfo, deployment: D
             message: 'Enter custom CARS Cloud URL:',
             when: (ans) => ans.cloudUrlChoice === 'custom',
             default: deployment.CARSCloudURL || 'http://localhost:7777'
-        },
-        {
-            type: 'input',
-            name: 'projectID',
-            message: 'Project ID:',
-            default: deployment.projectID,
-            validate: (val: string) => val.trim() ? true : 'Project ID is required.'
         },
         {
             type: 'input',
@@ -270,9 +347,12 @@ async function editCARSDeploymentInteractive(info: DeploymentInfo, deployment: D
 
     const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
 
+    // Possibly choose or create a new project ID if user wants
+    const projectID = await chooseOrCreateProjectID(finalCloudUrl, deployment.projectID);
+
     deployment.name = name.trim();
     deployment.CARSCloudURL = finalCloudUrl;
-    deployment.projectID = projectID.trim();
+    deployment.projectID = projectID;
     deployment.network = network.trim();
     deployment.deploy = deployTargets;
     deployment.frontendHostingMethod = frontendHosting === 'none' ? undefined : frontendHosting;
@@ -345,7 +425,7 @@ function printJSON(obj: any) {
 }
 
 /**
- * Project commands
+ * Project commands helpers
  */
 
 async function getAuthriteClientForDeployment(deployment: Deployment) {
@@ -355,6 +435,56 @@ async function getAuthriteClientForDeployment(deployment: Deployment) {
     }
     await ensureRegistered(deployment);
     return new AuthriteClient(deployment.CARSCloudURL);
+}
+
+/**
+ * Distinct CARS Cloud URLs
+ */
+function getDistinctCARSCloudURLs(info: DeploymentInfo): string[] {
+    const urls = (info.deployments || [])
+        .filter(isCARSDeployment)
+        .map(d => d.CARSCloudURL as string)
+        .filter(u => !!u);
+    return Array.from(new Set(urls));
+}
+
+async function chooseCARSCloudURL(info: DeploymentInfo, specifiedNameOrIndex?: string): Promise<string> {
+    if (specifiedNameOrIndex) {
+        const dep = findDeploymentByNameOrIndex(info, specifiedNameOrIndex);
+        if (!dep) {
+            console.error(chalk.red(`❌ Deployment "${specifiedNameOrIndex}" not found.`));
+            process.exit(1);
+        }
+        if (!isCARSDeployment(dep)) {
+            console.error(chalk.red(`❌ Deployment "${specifiedNameOrIndex}" is not a CARS deployment.`));
+            process.exit(1);
+        }
+        if (!dep.CARSCloudURL) {
+            console.error(chalk.red('❌ This CARS deployment has no CARSCloudURL set.'));
+            process.exit(1);
+        }
+        return dep.CARSCloudURL;
+    }
+
+    const urls = getDistinctCARSCloudURLs(info);
+    if (urls.length === 0) {
+        console.error(chalk.red('❌ No CARS Cloud deployments found in deployment-info.json.'));
+        process.exit(1);
+    }
+    if (urls.length === 1) {
+        return urls[0];
+    }
+
+    const { chosenURL } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'chosenURL',
+            message: 'Select a CARS Cloud server:',
+            choices: urls
+        }
+    ]);
+
+    return chosenURL;
 }
 
 /**
@@ -368,18 +498,10 @@ const configCommand = program
 
 configCommand
     .command('ls')
-    .description('List all CARS deployments')
+    .description('List all deployments (CARS and non-CARS)')
     .action(() => {
         const info = loadDeploymentInfo();
-        const cars = getCARSDeployments(info);
-        if (cars.length === 0) {
-            console.log(chalk.yellow('No CARS deployments found.'));
-            return;
-        }
-        console.log(chalk.blue('CARS deployments:'));
-        cars.forEach((c, i) => {
-            console.log(`${i}: ${c.name} (CARSCloudURL: ${c.CARSCloudURL}, projectID: ${c.projectID || 'none'})`);
-        });
+        printAllDeploymentsWithIndex(info);
     });
 
 configCommand
@@ -395,9 +517,13 @@ configCommand
     .description('Edit a CARS deployment')
     .action(async (nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const dep = findCARSDeploymentByNameOrIndex(info, nameOrIndex);
+        const dep = findDeploymentByNameOrIndex(info, nameOrIndex);
         if (!dep) {
-            console.error(chalk.red(`❌ CARS deployment "${nameOrIndex}" not found.`));
+            console.error(chalk.red(`❌ Deployment "${nameOrIndex}" not found.`));
+            process.exit(1);
+        }
+        if (!isCARSDeployment(dep)) {
+            console.error(chalk.red(`❌ Deployment "${nameOrIndex}" is not a CARS deployment.`));
             process.exit(1);
         }
         await editCARSDeploymentInteractive(info, dep);
@@ -405,12 +531,16 @@ configCommand
 
 configCommand
     .command('delete <nameOrIndex>')
-    .description('Delete a CARS deployment')
+    .description('Delete a deployment')
     .action((nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const dep = findCARSDeploymentByNameOrIndex(info, nameOrIndex);
+        const dep = findDeploymentByNameOrIndex(info, nameOrIndex);
         if (!dep) {
-            console.error(chalk.red(`❌ CARS deployment "${nameOrIndex}" not found.`));
+            console.error(chalk.red(`❌ Deployment "${nameOrIndex}" not found.`));
+            process.exit(1);
+        }
+        if (!isCARSDeployment(dep)) {
+            console.error(chalk.red(`❌ Deployment "${nameOrIndex}" is not a CARS deployment.`));
             process.exit(1);
         }
         deleteCARSDeployment(info, dep);
@@ -420,10 +550,11 @@ configCommand
     .action(async () => {
         // Interactive menu to manage deployments
         const info = loadDeploymentInfo();
-        const carsDeployments = getCARSDeployments(info);
+        const all = listAllDeployments(info);
+        const carsDeployments = all.filter(isCARSDeployment);
 
         const mainChoices = [
-            { name: 'List CARS deployments', value: 'ls' },
+            { name: 'List all deployments', value: 'ls' },
             { name: 'Add a new CARS deployment', value: 'add' }
         ];
 
@@ -446,19 +577,11 @@ configCommand
             ]);
 
             if (action === 'ls') {
-                console.log(chalk.blue('CARS deployments:'));
-                const cars = getCARSDeployments(info);
-                if (cars.length === 0) {
-                    console.log(chalk.yellow('No CARS deployments found.'));
-                } else {
-                    cars.forEach((c, i) => {
-                        console.log(`${i}: ${c.name} (CARSCloudURL: ${c.CARSCloudURL}, projectID: ${c.projectID})`);
-                    });
-                }
+                printAllDeploymentsWithIndex(info);
             } else if (action === 'add') {
                 await addCARSDeploymentInteractive(info);
             } else if (action === 'edit') {
-                const cars = getCARSDeployments(info);
+                const cars = all.filter(isCARSDeployment);
                 if (cars.length === 0) {
                     console.log(chalk.yellow('No CARS deployments to edit.'));
                 } else {
@@ -467,16 +590,19 @@ configCommand
                             type: 'list',
                             name: 'chosenIndex',
                             message: 'Select a CARS deployment to edit:',
-                            choices: cars.map((d, i) => ({
-                                name: `${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL})`,
-                                value: i
-                            }))
+                            choices: cars.map(d => {
+                                const idx = all.indexOf(d);
+                                return {
+                                    name: `${idx}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL})`,
+                                    value: idx
+                                };
+                            })
                         }
                     ]);
-                    await editCARSDeploymentInteractive(info, cars[chosenIndex]);
+                    await editCARSDeploymentInteractive(info, all[chosenIndex]);
                 }
             } else if (action === 'delete') {
-                const cars = getCARSDeployments(info);
+                const cars = all.filter(isCARSDeployment);
                 if (cars.length === 0) {
                     console.log(chalk.yellow('No CARS deployments to delete.'));
                 } else {
@@ -485,13 +611,16 @@ configCommand
                             type: 'list',
                             name: 'chosenIndex',
                             message: 'Select a CARS deployment to delete:',
-                            choices: cars.map((d, i) => ({
-                                name: `${i}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL})`,
-                                value: i
-                            }))
+                            choices: cars.map(d => {
+                                const idx = all.indexOf(d);
+                                return {
+                                    name: `${idx}: ${d.name} (CARSCloudURL: ${d.CARSCloudURL})`,
+                                    value: idx
+                                };
+                            })
                         }
                     ]);
-                    deleteCARSDeployment(info, cars[chosenIndex]);
+                    deleteCARSDeployment(info, all[chosenIndex]);
                 }
             } else {
                 done = true;
@@ -513,33 +642,24 @@ const projectCommand = program
     .description('Manage projects via CARS');
 
 projectCommand
-    .command('create')
-    .description('Create a new project on a chosen CARS deployment')
-    .action(async () => {
+    .command('ls [nameOrIndex]')
+    .description('List all projects on a chosen CARS Cloud server')
+    .action(async (nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = await pickCARSDeployment(info);
-        const client = await getAuthriteClientForDeployment(deployment);
-        const result = await client.createSignedRequest('/api/v1/project/create', {});
-        printJSON(result);
-    });
-
-projectCommand
-    .command('ls')
-    .description('List all projects (for the chosen CARS deployment)')
-    .action(async () => {
-        const info = loadDeploymentInfo();
-        const deployment = await pickCARSDeployment(info);
-        const client = await getAuthriteClientForDeployment(deployment);
+        const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
+        const client = new AuthriteClient(chosenURL);
+        await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
         const result = await client.createSignedRequest('/api/v1/projects/list', {});
+        console.log(chalk.blue(`Projects on server: ${chosenURL}`));
         printJSON(result);
     });
 
 projectCommand
-    .command('add-admin <identityKey>')
-    .description('Add an admin to the project')
-    .action(async (identityKey) => {
+    .command('add-admin <identityKey> [nameOrIndex]')
+    .description('Add an admin to the project of the chosen deployment')
+    .action(async (identityKey, nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
         if (!deployment.projectID) {
             console.error(chalk.red('❌ No project ID set in this deployment.'));
             process.exit(1);
@@ -550,11 +670,11 @@ projectCommand
     });
 
 projectCommand
-    .command('remove-admin <identityKey>')
-    .description('Remove an admin from the project')
-    .action(async (identityKey) => {
+    .command('remove-admin <identityKey> [nameOrIndex]')
+    .description('Remove an admin from the project of the chosen deployment')
+    .action(async (identityKey, nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
         if (!deployment.projectID) {
             console.error(chalk.red('❌ No project ID set in this deployment.'));
             process.exit(1);
@@ -565,11 +685,11 @@ projectCommand
     });
 
 projectCommand
-    .command('logs')
-    .description('View logs of the project')
-    .action(async () => {
+    .command('logs [nameOrIndex]')
+    .description('View logs of the project from the chosen deployment')
+    .action(async (nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
         if (!deployment.projectID) {
             console.error(chalk.red('❌ No project ID set in this deployment.'));
             process.exit(1);
@@ -580,11 +700,11 @@ projectCommand
     });
 
 projectCommand
-    .command('deploys')
-    .description('List all deployments for the project')
-    .action(async () => {
+    .command('deploys [nameOrIndex]')
+    .description('List all deploys for the project from the chosen deployment configuration')
+    .action(async (nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
         if (!deployment.projectID) {
             console.error(chalk.red('❌ No project ID set in this deployment.'));
             process.exit(1);
@@ -601,12 +721,10 @@ const deployCommand = program
 
 deployCommand
     .command('get-upload-url [nameOrIndex]')
-    .description('Create a new deployment for a chosen CARS deployment and get the upload URL')
+    .description('Create a new deploy (release) for a chosen CARS deployment and get the upload URL')
     .action(async (nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = nameOrIndex
-            ? findCARSDeploymentByNameOrIndex(info, nameOrIndex) || (await pickCARSDeployment(info))
-            : await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
 
         if (!deployment.projectID) {
             console.error(chalk.red('❌ No project ID set in this deployment.'));
@@ -648,9 +766,7 @@ deployCommand
     .description('View logs of a deployment by its ID')
     .action(async (deploymentId, nameOrIndex) => {
         const info = loadDeploymentInfo();
-        const deployment = nameOrIndex
-            ? findCARSDeploymentByNameOrIndex(info, nameOrIndex) || (await pickCARSDeployment(info))
-            : await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
         const client = await getAuthriteClientForDeployment(deployment);
         const result = await client.createSignedRequest(`/api/v1/deploy/${deploymentId}/logs/show`, {});
         printJSON(result);
@@ -658,13 +774,11 @@ deployCommand
 
 deployCommand
     .command('now [nameOrIndex]')
-    .description('Build and deploy the latest artifact directly to the chosen CARS deployment')
+    .description('Upload the latest artifact directly to the chosen CARS deployment as a new release')
     .action(async (nameOrIndex) => {
         const { default: ora } = await import('ora');
         const info = loadDeploymentInfo();
-        const deployment = nameOrIndex
-            ? findCARSDeploymentByNameOrIndex(info, nameOrIndex) || (await pickCARSDeployment(info))
-            : await pickCARSDeployment(info);
+        const deployment = await pickCARSDeployment(info, nameOrIndex);
 
         if (!deployment.projectID) {
             console.error(chalk.red('❌ No project ID set in this deployment.'));
