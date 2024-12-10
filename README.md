@@ -1,58 +1,80 @@
 # CARS CLI — Cloud Automated Runtime System
 
-The **CARS CLI** (`cars`) is a command-line interface for deploying and managing BSV Blockchain-based Overlay Services in production cloud environments. It extends the concepts used locally by LARS (Local Automated Runtime System) to a scalable cloud platform, enabling developers to seamlessly deploy Topic Managers, Lookup Services, and related BSV project components to the cloud.
+The **CARS CLI** (`cars`) is a command-line interface for deploying and managing BSV Blockchain-based Overlay Services in production cloud environments. It builds on concepts you may know from LARS (Local Automated Runtime System) and OverlayExpress, making it easy to go from local development to cloud deployment.
 
-CARS integrates with cloud-based hosting providers that run an OverlayExpress environment, managing your `deployment-info.json` configuration, building artifacts, and deploying them to a remote runtime environment. This process is similar in spirit to how Netlify or Vercel works for web applications, but specialized for BSV Overlay Services.
+## Overview
+
+CARS enables you to:
+
+- **Create and manage multiple deployment configurations** directly from your project's `deployment-info.json`.
+- **Build and deploy your BSV project** (including frontend and backend components) to a CARS-enabled cloud environment.
+- **Manage projects, admins, and releases** remotely with simple CLI commands.
+- **Interactively configure and operate** if no arguments are supplied, guiding you through the setup process.
 
 ## Key Features
 
-- **Cloud-based Deployments**: Push local BSV projects to a configured CARS cloud provider.
-- **Automated Builds**: Compiles Topic Managers, Lookup Services, and optionally frontend code to a deployable artifact.
-- **Unified Configurations**: Manage multiple cloud deployment targets and easily switch between them.
-- **Project Management**: Create, configure, and manage projects and deployments directly from the CLI.
-- **Continuous Improvements**: Integrates easily into existing CI/CD pipelines and developer workflows.
+- **Interactive Menus**: Running `cars` without arguments launches an interactive menu system for easy navigation.
+- **Multiple Configurations in One File**: All configurations and deployment targets are stored in `deployment-info.json` at your project root.
+- **Automated Builds**: The `cars build` command compiles and packages your backend, frontend, and configuration into a single deployable artifact.
+- **Seamless Deployments**: Quickly create new releases, get secure upload URLs, and deploy artifacts to the cloud.
+- **Project Management**: Administer projects, add/remove admins, and view logs all through the CLI.
 
 ## Installation
 
-You can install the CARS CLI globally using NPM:
+Install the CARS CLI globally with:
 
 ```bash
 npm install -g @bsv/cars-cli
 ```
 
-This will make the `cars` command available system-wide.
+After installation, the `cars` command is available system-wide.
 
 ## Prerequisites
 
-- **BSV Project Structure**: Your project should conform to the `deployment-info.json` schema used by LARS and OverlayExpress.  
+- A **BSV Project** structured similarly to what LARS/OverlayExpress expect. Typically:
+  - `deployment-info.json` in the project root.
+  - `backend/` directory for backend code (Topic Managers, Lookup Services).
+  - `frontend/` directory for frontend code (optional).
+  
+- A **CARS Cloud** environment URL provided by your hosting service or a local CARS server (e.g., `http://localhost:7777`).
 
 ## Getting Started
 
-### 1. Create a CARS Configuration
+### 1. Initialize Your Environment
 
-First, you need to create a configuration profile for your desired cloud environment. This stores settings like the CARS Cloud URL and defaults.
+Make sure your project has a `deployment-info.json`. If not, create one according to the [OverlayExpress schema](https://github.com/tonicpow/overlayexpress) and place it at the root.
+
+If you run `cars` in a directory without a `deployment-info.json`, the CLI will help you create a basic one.
+
+### 2. Create a CARS Configuration
+
+Run `cars` with no arguments:
 
 ```bash
-cars config create
+cars
 ```
 
-You will be prompted to select a cloud URL and optional defaults. After creation, a configuration is stored in `~/.cars-config.json`. If you have multiple profiles, you can switch between them using:
+This will open an interactive menu if `deployment-info.json` is found. If you have no CARS configurations, the CLI will guide you through creating one:
+
+- **Choose a CARS Cloud URL** (e.g. `http://localhost:7777` or a production URL).
+- **Create or select a Project ID** on that CARS Cloud (you can create a new one directly).
+- **Configure which parts of your project to deploy** (e.g., `frontend`, `backend`).
+
+You can also explicitly create a new CARS configuration anytime:
 
 ```bash
-cars config activate <profileName>
+cars config add
 ```
 
-### 2. Prepare Your Project
+This prompts you for the configuration details and updates `deployment-info.json`.
 
-Ensure your project includes a `deployment-info.json` file and follows the standard BSV project structure (as used by LARS):
+### 3. Register Your Identity
 
-- `backend/` directory with your Topic Managers and Lookup Services.
-- `frontend/` directory if you have a user interface.
-- `deployment-info.json` at the project root, referencing topic managers, lookup services, etc.
+CARS uses BSV Auth for authentication. The first request you make to a new CARS Cloud may prompt registration. The CLI handles this automatically. Once registered, your identity is remembered so you can administer projects and deploy seamlessly.
 
-### 3. Build Your Artifact
+### 4. Building an Artifact
 
-From within your project's root directory (where `deployment-info.json` lives):
+Before you deploy, you need to build a deployable artifact. From your project root (where `deployment-info.json` is):
 
 ```bash
 cars build
@@ -60,128 +82,132 @@ cars build
 
 This command:
 
-- Installs dependencies (backend/frontend).
-- Compiles contracts and code as necessary.
-- Produces a compressed artifact (`.tgz`) for deployment.
+- Installs and builds dependencies for `backend/` and `frontend/`.
+- Packages everything into a `.tgz` artifact in the current directory.
 
-### 4. Create a Project on the Cloud
-
-If you haven't created a project in the CARS cloud environment yet:
+You can list your local artifacts with:
 
 ```bash
-cars project create
+cars artifact ls
 ```
 
-This will return information about the created project, including a `projectId`.
+### 5. Creating a Project (If Needed)
 
-**Note**: You must have an active configuration and be authenticated.
-
-### 5. Deploy Your Artifact to the Project
-
-Deploy your latest built artifact to the cloud:
+If you didn't create a project when adding the config, you can do so through the interactive `cars` menu under **"Manage Projects"**, or via:
 
 ```bash
-cars deploy <projectId>
+cars project
 ```
 
-This retrieves an upload URL and posts your artifact to the CARS cloud, initiating the deployment process.
+Then select the appropriate actions.  
+If you have multiple configurations, you’ll be prompted to choose one or create a new project for your chosen CARS config.
 
-### 6. Check Logs and Deployment Status
+### 6. Deploying Your Artifact
 
-You can view logs for your project and deployments:
+You have two main options:
+
+**Option A: Deploy Immediately**
+
+If you've just built an artifact and want to deploy it now, run:
 
 ```bash
-cars project logs <projectId>
-cars deploy logs <deploymentId>
+cars release now
 ```
 
-Use these commands to troubleshoot and monitor deployments.
+Select the configuration if prompted, and the CLI will:
 
-## Commands Reference
+- Create a new release (deployment) on the CARS Cloud.
+- Automatically upload your latest artifact.
 
-**Configuration Commands**
+**Option B: Get an Upload URL First**
 
-- **`cars config create [name]`**  
-  Create a new configuration profile. Prompts for cloud URL and preferences if no arguments are given.
+If you want to separate the steps (e.g., CI/CD pipelines):
 
-- **`cars config list`**  
-  Lists all configuration profiles.
+```bash
+cars release get-upload-url
+```
 
-- **`cars config activate <name>`**  
-  Activates a previously created configuration profile.
+This returns a `deploymentId` and a signed `uploadURL`. Then you can upload the artifact manually:
 
-- **`cars config edit <name>`**  
-  Edit an existing configuration profile (e.g., change the cloud URL, defaults).
+```bash
+cars release upload-files <uploadURL> <path-to-artifact>
+```
 
-- **`cars config delete <name>`**  
-  Delete a configuration profile.
+### 7. Managing Projects and Admins
 
-- **`cars config get <key>`**  
-  Get a value from the active configuration. Valid keys: `cloudUrl`, `defaultProjectId`, `defaultProjectDir`, `autoSetProjectId`.
+You can list projects, manage admins, and view logs:
 
-- **`cars config set <key> <value>`**  
-  Set a value in the active configuration.  
-  Example: `cars config set defaultProjectId my-project-123`
+```bash
+cars project ls
+cars project add-admin <identityKey>
+cars project remove-admin <identityKey>
+cars project list-admins
+cars project logs
+```
 
-- **`cars config reset`**  
-  Reset (delete) all configurations.
+Follow the interactive prompts if not specifying arguments.  
 
-**Build and Artifact Commands**
+### 8. Viewing Releases and Logs
 
-- **`cars build`**  
-  Builds a local artifact (`.tgz`) from your project. Installs dependencies, compiles code, and packages `backend/`, `frontend/`, and `deployment-info.json`.
+List releases for your project:
 
-**Project Commands**
+```bash
+cars project releases
+```
 
-- **`cars project create`**  
-  Create a new project in the CARS cloud. Returns a `projectId` that you can use for deployments.
+View logs for a specific release:
 
-- **`cars project ls`**  
-  List all projects you administer.
+```bash
+cars release logs <releaseId>
+```
 
-- **`cars project add-admin <projectId> <identityKey>`**  
-  Add a new admin user (by identity key) to a project.
+If you don’t provide a `releaseId`, you’ll be prompted to choose one.
 
-- **`cars project remove-admin <projectId> <identityKey>`**  
-  Remove an existing admin from a project.
+## Command Reference
 
-- **`cars project logs <projectId>`**  
-  Show logs for the specified project.
+**Main Command (Interactive)**  
+- **`cars`**  
+  Running `cars` with no arguments opens an interactive menu-driven interface for all actions. Ideal for first-time usage.
 
-- **`cars project deploys <projectId>`**  
-  List all deployments for a given project.
+**Configuration Commands** (Manage `deployment-info.json` configs)  
+- **`cars config`** (no args) : Interactive config menu.  
+- **`cars config ls`** : List all configurations (CARS and others).  
+- **`cars config add`** : Add a new CARS configuration interactively.  
+- **`cars config edit <nameOrIndex>`** : Edit an existing CARS configuration.  
+- **`cars config delete <nameOrIndex>`** : Delete a CARS configuration.
 
-**Deployment Commands**
+**Build Command**  
+- **`cars build`** : Builds a `.tgz` artifact from your project.
 
-- **`cars deploy <projectId>`**  
-  Creates a new deployment for `projectId` and uploads the latest artifact.
+**Project Management Commands**  
+- **`cars project`** : Interactive project menu.  
+- **`cars project ls`** : List all projects where you’re an admin.  
+- **`cars project add-admin <identityKey>`** : Add an admin to the selected project.  
+- **`cars project remove-admin <identityKey>`** : Remove an admin from the selected project.  
+- **`cars project list-admins`** : List all admins of the selected project.  
+- **`cars project logs`** : Show logs for the selected project.  
+- **`cars project releases`** : List all releases (deployments) for the selected project.
 
-- **`cars deploy get-upload-url <projectId>`**  
-  Get a new deployment upload URL without immediately uploading. Useful if you want to handle the upload separately.
+**Release Management Commands**  
+- **`cars release`** : Interactive release menu.  
+- **`cars release get-upload-url`** : Create a new release and return an upload URL.  
+- **`cars release upload-files <uploadURL> <artifactPath>`** : Upload artifact to a previously obtained URL.  
+- **`cars release logs [releaseId]`** : View logs of a given release (prompted if `releaseId` not provided).  
+- **`cars release now`** : Create and upload a new release using the latest artifact in one step.
 
-- **`cars deploy upload-files <uploadURL> <artifactPath>`**  
-  Upload an artifact to a previously obtained `uploadURL`. This is a low-level command, typically `cars deploy <projectId>` is simpler.
+**Artifact Management Commands**  
+- **`cars artifact`** : Interactive artifact menu.  
+- **`cars artifact ls`** : List all local artifacts.  
+- **`cars artifact delete <artifactName>`** : Delete a specified local artifact.
 
-- **`cars deploy logs <deploymentId>`**  
-  View logs of a specific deployment.
+## Tips & Advanced Usage
 
-## Advanced Usage
-
-**Auto-Setting Project IDs**:  
-If `autoSetProjectId` is enabled in your config and `defaultProjectDir` matches your current directory, the CLI can remember the last used `projectId` for that directory. This helps streamline repeated deployments without needing to specify the `projectId` each time.
-
-**Multiple Configurations**:  
-You can create multiple configurations for different cloud environments (e.g., `staging`, `production`) and switch between them with `cars config activate`.
-
-**Continuous Integration**:  
-Integrate `cars build` and `cars deploy <projectId>` into your CI workflows to automatically build and deploy on every commit or tag.
-
-## Troubleshooting
-
-- **No Active Config**: If you receive an error about no active configuration, run `cars config create` or `cars config activate <name>`.
-- **No `deployment-info.json`**: Ensure your project is structured correctly and includes a `deployment-info.json` at the root.
-
-CARS CLI provides a production-grade environment to host your BSV Overlay Services. By marrying the local convenience of LARS with the scalability and availability of the cloud, CARS helps you focus on building and iterating on your BSV-based apps, while it takes care of deployments and runtime management.
+- **Interactive Menus**: If you ever feel unsure about what to do next, just run `cars` without arguments and follow the menus.
+- **Multiple CARS Configs**: You can store several CARS configurations in one `deployment-info.json` (e.g., staging and production). The CLI will prompt you to pick which to use for each operation.
+- **Continuous Integration**:  
+  Add `cars build` and `cars release now` or `cars release get-upload-url && cars release upload-files ...` steps to your CI pipeline for automatic deployments on every commit.
+- **Logs and Troubleshooting**:  
+  Use `cars project logs` and `cars release logs` to investigate any issues in deployments.
 
 ## License
 
