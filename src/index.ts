@@ -209,7 +209,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             console.error(chalk.red('❌ Invalid response from CARS Cloud when checking projects.'));
             process.exit(1);
         }
-        // Check if the projectID is indeed in the returned list. The backend returns { projects: [projectIds] }.
+        // Check if the projectID is indeed in the returned list.
         if (!projects.projects.includes(projectID.trim())) {
             console.error(chalk.red(`❌ Project ID "${projectID}" not found on server ${cloudUrl}.`));
             process.exit(1);
@@ -246,7 +246,7 @@ async function addCARSConfigInteractive(info: CARSConfigInfo): Promise<CARSConfi
         { name: 'Custom', value: 'custom' }
     ];
 
-    const { name, cloudUrlChoice, customCloudUrl, network, deployTargets, frontendHosting } = await inquirer.prompt([
+    const { name, cloudUrlChoice, customCloudUrl, network, deployTargets } = await inquirer.prompt([
         {
             type: 'input',
             name: 'name',
@@ -280,15 +280,22 @@ async function addCARSConfigInteractive(info: CARSConfigInfo): Promise<CARSConfi
                 { name: 'frontend', value: 'frontend', checked: true },
                 { name: 'backend', value: 'backend', checked: true },
             ]
-        },
-        {
-            type: 'list',
-            name: 'frontendHosting',
-            message: 'Frontend hosting method (HTTPS/UHRP/none):',
-            choices: ['HTTPS', 'UHRP', 'none'],
-            default: 'HTTPS'
         }
     ]);
+
+    let frontendHostingMethod: string | undefined = undefined;
+    if (deployTargets.includes('frontend')) {
+        const { frontendHosting } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'frontendHosting',
+                message: 'Frontend hosting method (HTTPS/UHRP/none):',
+                choices: ['HTTPS', 'UHRP', 'none'],
+                default: 'HTTPS'
+            }
+        ]);
+        frontendHostingMethod = frontendHosting === 'none' ? undefined : frontendHosting;
+    }
 
     const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
     const projectID = await chooseOrCreateProjectID(finalCloudUrl);
@@ -300,7 +307,7 @@ async function addCARSConfigInteractive(info: CARSConfigInfo): Promise<CARSConfi
         projectID: projectID,
         network: network.trim(),
         deploy: deployTargets,
-        frontendHostingMethod: frontendHosting === 'none' ? undefined : frontendHosting
+        frontendHostingMethod
     };
 
     info.configs = info.configs || [];
@@ -325,7 +332,7 @@ async function editCARSConfigInteractive(info: CARSConfigInfo, config: CARSConfi
 
     const currentCloudChoice = cloudChoices.find(ch => ch.value === config.CARSCloudURL) ? config.CARSCloudURL : 'custom';
 
-    const { name, cloudUrlChoice, customCloudUrl, network, deployTargets, frontendHosting } = await inquirer.prompt([
+    const { name, cloudUrlChoice, customCloudUrl, network, deployTargets } = await inquirer.prompt([
         {
             type: 'input',
             name: 'name',
@@ -361,16 +368,22 @@ async function editCARSConfigInteractive(info: CARSConfigInfo, config: CARSConfi
                 { name: 'frontend', value: 'frontend', checked: config.deploy?.includes('frontend') },
                 { name: 'backend', value: 'backend', checked: config.deploy?.includes('backend') },
             ]
-        },
-        {
-            type: 'list',
-            name: 'frontendHosting',
-            message: 'Frontend hosting method:',
-            choices: ['HTTPS', 'UHRP', 'none'],
-            when: ans => ans.deployTargets.includes('frontend'),
-            default: config.frontendHostingMethod || 'none'
         }
     ]);
+
+    let frontendHostingMethod: string | undefined = undefined;
+    if (deployTargets.includes('frontend')) {
+        const { frontendHosting } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'frontendHosting',
+                message: 'Frontend hosting method:',
+                choices: ['HTTPS', 'UHRP', 'none'],
+                default: config.frontendHostingMethod || 'none'
+            }
+        ]);
+        frontendHostingMethod = frontendHosting === 'none' ? undefined : frontendHosting;
+    }
 
     const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
     const projectID = await chooseOrCreateProjectID(finalCloudUrl, config.projectID);
@@ -380,7 +393,7 @@ async function editCARSConfigInteractive(info: CARSConfigInfo, config: CARSConfi
     config.projectID = projectID;
     config.network = network.trim();
     config.deploy = deployTargets;
-    config.frontendHostingMethod = frontendHosting === 'none' ? undefined : frontendHosting;
+    config.frontendHostingMethod = frontendHostingMethod;
 
     saveCARSConfigInfo(info);
 
@@ -399,34 +412,184 @@ function deleteCARSConfig(info: CARSConfigInfo, config: CARSConfig) {
  * Build logic
  */
 
-async function buildArtifact() {
-    if (!fs.existsSync(CONFIG_PATH)) {
-        console.error(chalk.red('❌ No deployment-info.json found in current directory.'));
-        process.exit(1);
-    }
-    const carsConfigInfo: CARSConfigInfo = loadCARSConfigInfo();
+async function buildArtifact(nameOrIndex?: string) {
+    const carsConfigInfo = loadCARSConfigInfo();
     if (carsConfigInfo.schema !== 'bsv-app') {
         console.error(chalk.red('❌ Invalid schema in deployment-info.json'));
         process.exit(1);
     }
 
+    // Pick a CARS config to determine what to build
+    const activeConfig = await pickCARSConfig(carsConfigInfo, nameOrIndex);
+    const deploy = activeConfig.deploy || [];
+
     console.log(chalk.blue('🛠  Building local project artifact...'));
-    const artifactName = `${ARTIFACT_PREFIX}${Date.now()}${ARTIFACT_EXTENSION}`;
+
+    // Run top-level npm i
     spawnSync('npm', ['i'], { stdio: 'inherit' });
-    if (fs.existsSync('backend/package.json')) {
-        spawnSync('npm', ['i'], { cwd: 'backend', stdio: 'inherit' });
-        spawnSync('npm', ['run', 'compile'], { cwd: 'backend', stdio: 'inherit' });
-        spawnSync('npm', ['run', 'build'], { cwd: 'backend', stdio: 'inherit' });
-    }
-    if (fs.existsSync('frontend/package.json')) {
-        spawnSync('npm', ['i'], { cwd: 'frontend', stdio: 'inherit' });
-        spawnSync('npm', ['run', 'build'], { cwd: 'frontend', stdio: 'inherit' });
+
+    // Prepare for building
+    // Backend logic
+    if (deploy.includes('backend')) {
+        if (fs.existsSync('backend/package.json')) {
+            // Check contracts language if set
+            if (carsConfigInfo.contracts && carsConfigInfo.contracts.language) {
+                if (carsConfigInfo.contracts.language !== 'sCrypt') {
+                    console.error(chalk.red(`❌ Unsupported contracts language: ${carsConfigInfo.contracts.language}. Only 'sCrypt' is supported.`));
+                    process.exit(1);
+                }
+                // Language is sCrypt, run compile if script exists
+                spawnSync('npm', ['i'], { cwd: 'backend', stdio: 'inherit' });
+
+                // Check if compile script exists in backend/package.json
+                const backendPkg = JSON.parse(fs.readFileSync('backend/package.json', 'utf-8'));
+                if (!backendPkg.scripts || !backendPkg.scripts.compile) {
+                    console.error(chalk.red('❌ No "compile" script found in backend package.json for sCrypt contracts.'));
+                    process.exit(1);
+                }
+                const compileResult = spawnSync('npm', ['run', 'compile'], { cwd: 'backend', stdio: 'inherit' });
+                if (compileResult.status !== 0) {
+                    console.error(chalk.red('❌ sCrypt contract compilation failed.'));
+                    process.exit(1);
+                }
+                const buildResult = spawnSync('npm', ['run', 'build'], { cwd: 'backend', stdio: 'inherit' });
+                if (buildResult.status !== 0) {
+                    console.error(chalk.red('❌ Backend build failed.'));
+                    process.exit(1);
+                }
+            } else {
+                // No contracts specified means maybe no compile needed, but we still build if script exists.
+                spawnSync('npm', ['i'], { cwd: 'backend', stdio: 'inherit' });
+                // We can just run build if it exists, else ignore
+                const backendPkg = JSON.parse(fs.readFileSync('backend/package.json', 'utf-8'));
+                if (backendPkg.scripts && backendPkg.scripts.build) {
+                    const buildResult = spawnSync('npm', ['run', 'build'], { cwd: 'backend', stdio: 'inherit' });
+                    if (buildResult.status !== 0) {
+                        console.error(chalk.red('❌ Backend build failed.'));
+                        process.exit(1);
+                    }
+                }
+            }
+        } else {
+            console.error(chalk.red('❌ Backend specified in deploy but no backend/package.json found.'));
+            process.exit(1);
+        }
     }
 
-    const filesToInclude = ['backend', 'frontend', 'deployment-info.json', 'package.json', 'package-lock.json'].filter(fs.existsSync);
-    await tar.create({ gzip: true, file: artifactName }, filesToInclude);
+    // Frontend logic
+    if (deploy.includes('frontend')) {
+        if (!carsConfigInfo.frontend || !carsConfigInfo.frontend.language) {
+            console.error(chalk.red('❌ Frontend is included in deploy but no frontend configuration (language) found.'));
+            process.exit(1);
+        }
+        const frontendLang = carsConfigInfo.frontend.language.toLowerCase();
+        if (!fs.existsSync('frontend/package.json')) {
+            if (frontendLang === 'html') {
+                // If html, we just need index.html
+                if (!fs.existsSync('frontend/index.html')) {
+                    console.error(chalk.red('❌ Frontend language set to html but no index.html found in frontend directory.'));
+                    process.exit(1);
+                }
+            } else {
+                console.error(chalk.red('❌ Frontend language requires a build but no frontend/package.json found.'));
+                process.exit(1);
+            }
+        }
+
+        if (frontendLang === 'react') {
+            // React build
+            spawnSync('npm', ['i'], { cwd: 'frontend', stdio: 'inherit' });
+            const buildResult = spawnSync('npm', ['run', 'build'], { cwd: 'frontend', stdio: 'inherit' });
+            if (buildResult.status !== 0) {
+                console.error(chalk.red('❌ Frontend build (react) failed.'));
+                process.exit(1);
+            }
+            if (!fs.existsSync('frontend/build')) {
+                console.error(chalk.red('❌ React build directory not found in frontend/build after build.'));
+                process.exit(1);
+            }
+        } else if (frontendLang === 'html') {
+            // Just ensure index.html
+            if (!fs.existsSync('frontend/index.html')) {
+                console.error(chalk.red('❌ Frontend language set to html but no index.html found.'));
+                process.exit(1);
+            }
+            // No build needed
+        } else {
+            console.error(chalk.red(`❌ Unsupported frontend language: ${carsConfigInfo.frontend.language}. Only 'react' or 'html' are currently supported. CARS pull requests are welcome!`));
+            process.exit(1);
+        }
+    }
+
+    const artifactName = `${ARTIFACT_PREFIX}${Date.now()}${ARTIFACT_EXTENSION}`;
+
+    // We'll create a temporary directory to stage files
+    const tmpDir = path.join(process.cwd(), 'cars_tmp_build_' + Date.now());
+    fs.mkdirSync(tmpDir);
+
+    // Always include deployment-info.json, package.json, package-lock.json if they exist
+    copyIfExists('deployment-info.json', tmpDir);
+    copyIfExists('package.json', tmpDir);
+    copyIfExists('package-lock.json', tmpDir);
+
+    if (deploy.includes('backend')) {
+        if (!fs.existsSync('backend')) {
+            console.error(chalk.red('❌ Backend is in deploy but no backend directory found.'));
+            process.exit(1);
+        }
+        copyDirectory('backend', path.join(tmpDir, 'backend'));
+    }
+
+    if (deploy.includes('frontend')) {
+        const frontendLang = carsConfigInfo.frontend?.language.toLowerCase();
+        if (frontendLang === 'react') {
+            // Copy frontend/build to frontend
+            if (!fs.existsSync('frontend/build')) {
+                console.error(chalk.red('❌ React frontend build output not found.'));
+                process.exit(1);
+            }
+            copyDirectory('frontend/build', path.join(tmpDir, 'frontend'));
+        } else if (frontendLang === 'html') {
+            // Copy entire frontend directory as is
+            if (!fs.existsSync('frontend/index.html')) {
+                console.error(chalk.red('❌ HTML frontend index.html not found.'));
+                process.exit(1);
+            }
+            copyDirectory('frontend', path.join(tmpDir, 'frontend'));
+        }
+    }
+
+    // Create the artifact tarball
+    await tar.create({ gzip: true, file: artifactName, cwd: tmpDir }, ['.']);
+    // Clean up
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
     console.log(chalk.green(`✅ Artifact created: ${artifactName}`));
     return artifactName;
+}
+
+function copyIfExists(src: string, destDir: string) {
+    if (fs.existsSync(src)) {
+        const dest = path.join(destDir, path.basename(src));
+        fs.copyFileSync(src, dest);
+    }
+}
+
+function copyDirectory(src: string, dest: string) {
+    if (!fs.existsSync(dest)) {
+        fs.mkdirSync(dest, { recursive: true });
+    }
+
+    const entries = fs.readdirSync(src, { withFileTypes: true });
+    for (const entry of entries) {
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
+        if (entry.isDirectory()) {
+            copyDirectory(srcPath, destPath);
+        } else {
+            fs.copyFileSync(srcPath, destPath);
+        }
+    }
 }
 
 function findArtifacts(): string[] {
@@ -621,8 +784,6 @@ async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Pr
 
 async function mainMenu() {
     const info = loadCARSConfigInfo();
-    const carsConfigs = info.configs?.filter(isCARSConfig) || [];
-
     const choices = [
         { name: 'Manage CARS Configurations', value: 'config' },
         { name: 'Manage Projects', value: 'project' },
@@ -907,7 +1068,7 @@ async function releaseMenu() {
                 printReleaseLog(result.logs);
             }
         } else if (action === 'now') {
-            // Build and upload latest artifact directly
+            // Upload latest artifact directly
             const config = await pickCARSConfig(info);
             if (!config.projectID) {
                 console.error(chalk.red('❌ No project ID set in this configuration.'));
@@ -1070,10 +1231,10 @@ configCommand
 
 // build
 program
-    .command('build')
+    .command('build [nameOrIndex]')
     .description('Build local artifact for release')
-    .action(async () => {
-        await buildArtifact();
+    .action(async (nameOrIndex) => {
+        await buildArtifact(nameOrIndex);
     });
 
 // project <subcommands>
