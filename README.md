@@ -42,7 +42,7 @@ After installation, the `cars` command is available system-wide.
 
 ### 1. Initialize Your Environment
 
-Make sure your project has a `deployment-info.json`. If not, create one according to the BSV Project Schema (TODO: Spec, link to spec.) and place it at the root.
+Make sure your project has a `deployment-info.json`. If not, create one according to the [BSV Project Schema](https://github.com/bitcoin-sv/BRCs/blob/master/apps/0102.md) and place it at the root.
 
 If you run `cars` in a directory without a `deployment-info.json`, the CLI will help you create a basic one.
 
