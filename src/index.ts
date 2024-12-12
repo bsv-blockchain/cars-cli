@@ -197,9 +197,16 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
         ]);
 
         // Validate project ID by listing projects
-        let projects;
+        let projects: {
+            projects: Array<{
+                id: string
+                name: string
+                balance: string
+                created_at: string
+            }>
+        };
         try {
-            projects = await client.createSignedRequest('/api/v1/projects/list', {});
+            projects = await client.createSignedRequest('/api/v1/project/list', {});
         } catch (error: any) {
             handleRequestError(error, 'Failed to retrieve projects from CARS Cloud.');
             process.exit(1);
@@ -210,7 +217,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             process.exit(1);
         }
         // Check if the projectID is indeed in the returned list.
-        if (!projects.projects.includes(projectID.trim())) {
+        if (!projects.projects.some(x => x.id === projectID.trim())) {
             console.error(chalk.red(`❌ Project ID "${projectID}" not found on server ${cloudUrl}.`));
             process.exit(1);
         }
@@ -636,13 +643,19 @@ function handleRequestError(error: any, contextMsg?: string) {
 /**
  * Data formatting for output
  */
-function printProjectList(projects: string[]) {
+function printProjectList(projects: Array<{
+    id: string
+    name: string
+    balance: string
+    created_at: string
+}>) {
+    console.log(projects)
     if (!projects || projects.length === 0) {
         console.log(chalk.yellow('No projects found.'));
         return;
     }
-    const table = new Table({ head: ['Project IDs'] });
-    projects.forEach(p => table.push([p]));
+    const table = new Table({ head: ['Project ID', 'Name', 'Created', 'Balance'] });
+    projects.forEach(p => table.push([p.id, p.name, new Date(p.created_at).toLocaleString(), p.balance]));
     console.log(table.toString());
 }
 
@@ -932,9 +945,16 @@ async function projectMenu() {
             const chosenURL = await chooseCARSCloudURL(info);
             const client = new AuthriteClient(chosenURL);
             await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
-            let result;
+            let result: {
+                projects: Array<{
+                    id: string
+                    name: string
+                    balance: string
+                    created_at: string
+                }>
+            };
             try {
-                result = await client.createSignedRequest('/api/v1/projects/list', {});
+                result = await client.createSignedRequest('/api/v1/project/list', {});
             } catch (e: any) {
                 handleRequestError(e, 'Failed to list projects');
             }
@@ -1063,7 +1083,7 @@ async function releaseMenu() {
                 continue;
             }
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ logs: string }>(client, `/api/v1/deploy/${releaseId}/logs/show`, {});
+            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/deploy/${releaseId}/logs/show`, {});
             if (result && typeof result.logs === 'string') {
                 printReleaseLog(result.logs);
             }
@@ -1250,9 +1270,16 @@ projectCommand
         const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
         const client = new AuthriteClient(chosenURL);
         await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
-        let result;
+        let result: {
+            projects: Array<{
+                id: string
+                name: string
+                balance: string
+                created_at: string
+            }>
+        };
         try {
-            result = await client.createSignedRequest('/api/v1/projects/list', {});
+            result = await client.createSignedRequest('/api/v1/project/list', {});
         } catch (e: any) {
             handleRequestError(e, 'Failed to list projects');
             process.exit(1);
