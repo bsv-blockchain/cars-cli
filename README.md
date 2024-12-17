@@ -10,6 +10,7 @@ CARS enables you to:
 - **Build and deploy your BSV project** (including frontend and backend components) to a CARS-enabled cloud environment.
 - **Manage projects, admins, and releases** remotely with simple CLI commands.
 - **Interactively configure and operate** if no arguments are supplied, guiding you through the setup process.
+- **View logs at different levels:** Project logs, release (deployment) logs, and resource-level logs from the running environment.
 
 ## Key Features
 
@@ -17,7 +18,7 @@ CARS enables you to:
 - **Multiple Configurations in One File**: All configurations and deployment targets are stored in `deployment-info.json` at your project root.
 - **Automated Builds**: The `cars build` command compiles and packages your backend, frontend, and configuration into a single deployable artifact.
 - **Seamless Deployments**: Quickly create new releases, get secure upload URLs, and deploy artifacts to the cloud.
-- **Project Management**: Administer projects, add/remove admins, and view logs all through the CLI.
+- **Project Management & Logging**: Administer projects, add/remove admins, and view various logs (project-level, release-level, and resource-level) through the CLI.
 
 ## Installation
 
@@ -143,25 +144,21 @@ cars project add-admin <identityKey>
 cars project remove-admin <identityKey>
 cars project list-admins
 cars project logs
+cars project resource-logs
 ```
 
-Follow the interactive prompts if not specifying arguments.  
+Follow the interactive prompts if not specifying arguments.
 
-### 8. Viewing Releases and Logs
+### 8. Viewing Logs
 
-List releases for your project:
+- **Project Logs:**  
+  Use `cars project logs` to view system-level logs for the selected project.
+  
+- **Resource Logs (Cluster-level):**  
+  Use `cars project resource-logs` to view logs from specific resources (`frontend`, `backend`, `mongo`, `mysql`). You can also specify filtering options like `--since`, `--tail`, and `--level`.
 
-```bash
-cars project releases
-```
-
-View logs for a specific release:
-
-```bash
-cars release logs <releaseId>
-```
-
-If you don’t provide a `releaseId`, you’ll be prompted to choose one.
+- **Release (Deployment) Logs:**  
+  Use `cars release logs <releaseId>` (or just `cars release logs` and select from a menu) to view logs for a particular release. This helps diagnose issues during or after a specific deployment.
 
 ## Command Reference
 
@@ -185,7 +182,8 @@ If you don’t provide a `releaseId`, you’ll be prompted to choose one.
 - **`cars project add-admin <identityKey>`** : Add an admin to the selected project.  
 - **`cars project remove-admin <identityKey>`** : Remove an admin from the selected project.  
 - **`cars project list-admins`** : List all admins of the selected project.  
-- **`cars project logs`** : Show logs for the selected project.  
+- **`cars project logs`** : Show system-level logs for the selected project.  
+- **`cars project resource-logs`** : Show logs from specific resources with optional filters.  
 - **`cars project releases`** : List all releases (deployments) for the selected project.
 
 **Release Management Commands**  
@@ -207,7 +205,7 @@ If you don’t provide a `releaseId`, you’ll be prompted to choose one.
 - **Continuous Integration**:  
   Add `cars build` and `cars release now` or `cars release get-upload-url && cars release upload-files ...` steps to your CI pipeline for automatic deployments on every commit.
 - **Logs and Troubleshooting**:  
-  Use `cars project logs` and `cars release logs` to investigate any issues in deployments.
+  Use `cars project logs` and `cars release logs` for project/release issues. For container-level troubleshooting, `cars project resource-logs` lets you filter and view real-time logs from different resources, making debugging easier.
 
 ## License
 

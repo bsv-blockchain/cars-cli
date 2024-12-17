@@ -14,7 +14,6 @@ import Table from 'cli-table3';
 /**
  * Types
  */
-
 interface CARSConfigInfo {
     schema: string;
     schemaVersion: string;
@@ -22,14 +21,13 @@ interface CARSConfigInfo {
     lookupServices?: Record<string, { serviceFactory: string; hydrateWith?: string }>;
     frontend?: { language: string; sourceDirectory: string };
     contracts?: { language: string; baseDirectory: string };
-    // Now called "configs" instead of "deployments"
     configs?: CARSConfig[];
 }
 
 interface CARSConfig {
     name: string;
     network?: string;
-    provider: string; // "CARS" or "LARS" or others
+    provider: string; // "CARS", "LARS" or another provider
     projectID?: string;
     CARSCloudURL?: string;
     deploy?: string[]; // which parts to release: "frontend", "backend"
@@ -45,6 +43,21 @@ interface CARSConfig {
 const CONFIG_PATH = path.resolve(process.cwd(), 'deployment-info.json');
 const ARTIFACT_PREFIX = 'cars_artifact_';
 const ARTIFACT_EXTENSION = '.tgz';
+const VALID_LOG_PERIODS = ['5m', '15m', '30m', '1h', '2h', '6h', '12h', '1d', '2d', '7d'] as const;
+const VALID_LOG_LEVELS = ['all', 'error', 'warn', 'info'] as const;
+
+type LogPeriod = typeof VALID_LOG_PERIODS[number];
+type LogLevel = typeof VALID_LOG_LEVELS[number];
+
+function isValidLogPeriod(period: string): period is LogPeriod {
+    return VALID_LOG_PERIODS.includes(period as LogPeriod);
+}
+
+function isValidLogLevel(level: string): level is LogLevel {
+    return VALID_LOG_LEVELS.includes(level as LogLevel);
+}
+
+const MAX_TAIL_LINES = 10000;
 
 /**
  * Utility functions
@@ -432,11 +445,9 @@ async function buildArtifact(nameOrIndex?: string) {
 
     console.log(chalk.blue('🛠  Building local project artifact...'));
 
-    // Run top-level npm i
     spawnSync('npm', ['i'], { stdio: 'inherit' });
 
-    // Prepare for building
-    // Backend logic
+    // Backend build
     if (deploy.includes('backend')) {
         if (fs.existsSync('backend/package.json')) {
             // Check contracts language if set
@@ -483,7 +494,7 @@ async function buildArtifact(nameOrIndex?: string) {
         }
     }
 
-    // Frontend logic
+    // Frontend build
     if (deploy.includes('frontend')) {
         if (!carsConfigInfo.frontend || !carsConfigInfo.frontend.language) {
             console.error(chalk.red('❌ Frontend is included in deploy but no frontend configuration (language) found.'));
@@ -516,12 +527,11 @@ async function buildArtifact(nameOrIndex?: string) {
                 process.exit(1);
             }
         } else if (frontendLang === 'html') {
-            // Just ensure index.html
+            // Just check index.html
             if (!fs.existsSync('frontend/index.html')) {
                 console.error(chalk.red('❌ Frontend language set to html but no index.html found.'));
                 process.exit(1);
             }
-            // No build needed
         } else {
             console.error(chalk.red(`❌ Unsupported frontend language: ${carsConfigInfo.frontend.language}. Only 'react' or 'html' are currently supported. CARS pull requests are welcome!`));
             process.exit(1);
@@ -541,7 +551,7 @@ async function buildArtifact(nameOrIndex?: string) {
 
     if (deploy.includes('backend')) {
         if (!fs.existsSync('backend')) {
-            console.error(chalk.red('❌ Backend is in deploy but no backend directory found.'));
+            console.error(chalk.red('❌ Backend deploy requested but no backend directory found.'));
             process.exit(1);
         }
         copyDirectory('backend', path.join(tmpDir, 'backend'));
@@ -566,9 +576,7 @@ async function buildArtifact(nameOrIndex?: string) {
         }
     }
 
-    // Create the artifact tarball
     await tar.create({ gzip: true, file: artifactName, cwd: tmpDir }, ['.']);
-    // Clean up
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     console.log(chalk.green(`✅ Artifact created: ${artifactName}`));
@@ -614,7 +622,7 @@ function findLatestArtifact(): string {
 }
 
 /**
- * Helper for Authrite requests with nice error handling
+ * Helper for requests
  */
 
 async function safeRequest<T = any>(client: AuthriteClient, endpoint: string, data: any): Promise<T | undefined> {
@@ -641,15 +649,9 @@ function handleRequestError(error: any, contextMsg?: string) {
 }
 
 /**
- * Data formatting for output
+ * Data formatting
  */
-function printProjectList(projects: Array<{
-    id: string
-    name: string
-    balance: string
-    created_at: string
-}>) {
-    console.log(projects)
+function printProjectList(projects: Array<{ id: string; name: string; balance: string; created_at: string }>) {
     if (!projects || projects.length === 0) {
         console.log(chalk.yellow('No projects found.'));
         return;
@@ -669,8 +671,8 @@ function printAdminsList(admins: string[]) {
     console.log(table.toString());
 }
 
-function printProjectLog(log: string) {
-    console.log(chalk.blue('Project Log:'));
+function printLogs(log: string, title: string) {
+    console.log(chalk.blue(`${title}:`));
     console.log(log.trim() || chalk.yellow('No logs yet.'));
 }
 
@@ -682,11 +684,6 @@ function printReleasesList(releases: string[]) {
     const table = new Table({ head: ['Release IDs'] });
     releases.forEach(r => table.push([r]));
     console.log(table.toString());
-}
-
-function printReleaseLog(log: string) {
-    console.log(chalk.blue('Release Log:'));
-    console.log(log.trim() || chalk.yellow('No logs yet.'));
 }
 
 function printArtifactsList() {
@@ -771,7 +768,6 @@ async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Pr
     if (providedReleaseId) {
         return providedReleaseId;
     }
-    // Fetch releases
     const client = await getAuthriteClientForConfig(config);
     const result = await safeRequest<{ deploys: string[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
     if (!result || !Array.isArray(result.deploys) || result.deploys.length === 0) {
@@ -789,6 +785,85 @@ async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Pr
     ]);
 
     return chosenRelease;
+}
+
+/**
+ * LOGGING PROMPTS
+ */
+
+async function promptResourceLogParameters(): Promise<{ resource: string; since: LogPeriod; tail: number; level: LogLevel }> {
+    const { resource } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'resource',
+            message: 'Select resource to view logs from:',
+            choices: ['frontend', 'backend', 'mongo', 'mysql']
+        }
+    ]);
+
+    const { since } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'since',
+            message: 'Select time period:',
+            choices: VALID_LOG_PERIODS,
+            default: '1h'
+        }
+    ]);
+
+    const { tail } = await inquirer.prompt([
+        {
+            type: 'number',
+            name: 'tail',
+            message: 'Number of lines to tail (1-10000):',
+            default: 1000,
+            validate: (val: number) => val > 0 && val <= MAX_TAIL_LINES ? true : 'Invalid tail number'
+        }
+    ]);
+
+    const { level } = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'level',
+            message: 'Select log level filter:',
+            choices: VALID_LOG_LEVELS,
+            default: 'all'
+        }
+    ]);
+
+    return { resource, since: since as LogPeriod, tail, level: level as LogLevel };
+}
+
+async function fetchResourceLogs(config: CARSConfig, params?: { resource?: string; since?: string; tail?: number; level?: string }) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID in configuration.'));
+        return;
+    }
+
+    const finalParams = { ...params };
+    if (!finalParams.resource || !['frontend', 'backend', 'mongo', 'mysql'].includes(finalParams.resource)) {
+        const userParams = await promptResourceLogParameters();
+        Object.assign(finalParams, userParams);
+    }
+
+    if (!isValidLogPeriod(finalParams.since || '1h')) {
+        finalParams.since = '1h';
+    }
+    if (!isValidLogLevel(finalParams.level || 'all')) {
+        finalParams.level = 'all';
+    }
+    const tailVal = Math.min(Math.max(1, Math.floor(finalParams.tail || 1000)), MAX_TAIL_LINES);
+
+    const client = await getAuthriteClientForConfig(config);
+    const result = await safeRequest<{ logs: string; metadata: any }>(
+        client,
+        `/api/v1/project/${config.projectID}/logs/resource/${finalParams.resource}`,
+        { since: finalParams.since, tail: tailVal, level: finalParams.level }
+    );
+
+    if (result && typeof result.logs === 'string') {
+        printLogs(result.logs, `Resource ${finalParams.resource} Logs`);
+    }
 }
 
 /**
@@ -925,8 +1000,9 @@ async function projectMenu() {
         { name: 'Add Admin to a Project', value: 'add-admin' },
         { name: 'Remove Admin from a Project', value: 'remove-admin' },
         { name: 'List Admins of a Project', value: 'list-admins' },
-        { name: 'View Project Logs', value: 'logs' },
-        { name: 'View Releases for a Project', value: 'releases' },
+        { name: 'View Project Logs', value: 'logs-project' },
+        { name: 'View Resource (Runtime) Logs', value: 'logs-resource' },
+        { name: 'List Releases for a Project', value: 'releases' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -945,21 +1021,12 @@ async function projectMenu() {
             const chosenURL = await chooseCARSCloudURL(info);
             const client = new AuthriteClient(chosenURL);
             await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
-            let result: {
-                projects: Array<{
-                    id: string
-                    name: string
-                    balance: string
-                    created_at: string
-                }>
-            };
+            let result: { projects: Array<{ id: string; name: string; balance: string; created_at: string }> };
             try {
                 result = await client.createSignedRequest('/api/v1/project/list', {});
+                printProjectList(result.projects);
             } catch (e: any) {
                 handleRequestError(e, 'Failed to list projects');
-            }
-            if (result && Array.isArray(result.projects)) {
-                printProjectList(result.projects);
             }
         } else if (action === 'add-admin') {
             const config = await pickCARSConfig(info);
@@ -1000,21 +1067,24 @@ async function projectMenu() {
             if (result && result.admins) {
                 printAdminsList(result.admins);
             }
-        } else if (action === 'logs') {
+        } else if (action === 'logs-project') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) {
                 console.error(chalk.red('❌ No project ID set in this configuration.'));
                 continue;
             }
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/show`, {});
+            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/project`, {});
             if (result && typeof result.logs === 'string') {
-                printProjectLog(result.logs);
+                printLogs(result.logs, 'Project Logs');
             }
+        } else if (action === 'logs-resource') {
+            const config = await pickCARSConfig(info);
+            await fetchResourceLogs(config);
         } else if (action === 'releases') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) {
-                console.error(chalk.red('❌ No project ID set in this configuration.'));
+                console.error(chalk.red('❌ No project ID set.'));
                 continue;
             }
             const client = await getAuthriteClientForConfig(config);
@@ -1036,6 +1106,7 @@ async function releaseMenu() {
         { name: 'View logs for a release', value: 'logs' },
         { name: 'Create new release for manual upload (get upload URL)', value: 'get-upload-url' },
         { name: 'Upload artifact to a manual release URL', value: 'upload-files' },
+        { name: 'View deployment logs (manual input)', value: 'logs-deployment-manual' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -1076,22 +1147,34 @@ async function releaseMenu() {
                 console.error(chalk.red('❌ No project ID set in this configuration.'));
                 continue;
             }
-            // Instead of asking for releaseId, we pick from menu
             const releaseId = await pickReleaseId(config);
             if (!releaseId) {
-                // No releases available
                 continue;
             }
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/deploy/${releaseId}/logs/show`, {});
+            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/deployment/${releaseId}`, {});
             if (result && typeof result.logs === 'string') {
-                printReleaseLog(result.logs);
+                printLogs(result.logs, 'Release Logs');
             }
-        } else if (action === 'now') {
-            // Upload latest artifact directly
+        } else if (action === 'logs-deployment-manual') {
+            // Allows entering a deploymentId manually
             const config = await pickCARSConfig(info);
             if (!config.projectID) {
                 console.error(chalk.red('❌ No project ID set in this configuration.'));
+                continue;
+            }
+            const { deploymentId } = await inquirer.prompt([
+                { type: 'input', name: 'deploymentId', message: 'Enter Deployment (Release) ID:' }
+            ]);
+            const client = await getAuthriteClientForConfig(config);
+            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/deployment/${deploymentId}`, {});
+            if (result && typeof result.logs === 'string') {
+                printLogs(result.logs, 'Release Logs');
+            }
+        } else if (action === 'now') {
+            const config = await pickCARSConfig(info);
+            if (!config.projectID) {
+                console.error(chalk.red('❌ No project ID set.'));
                 continue;
             }
 
@@ -1243,11 +1326,9 @@ configCommand
         deleteCARSConfig(info, cfg);
     });
 
-configCommand
-    .action(async () => {
-        // If `cars config` was run without subcommands, show the config menu
-        await configMenu();
-    });
+configCommand.action(async () => {
+    await configMenu();
+});
 
 // build
 program
@@ -1260,7 +1341,7 @@ program
 // project <subcommands>
 const projectCommand = program
     .command('project')
-    .description('Manage projects via CARS');
+    .description('Manage projects');
 
 projectCommand
     .command('ls [nameOrIndex]')
@@ -1270,21 +1351,13 @@ projectCommand
         const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
         const client = new AuthriteClient(chosenURL);
         await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
-        let result: {
-            projects: Array<{
-                id: string
-                name: string
-                balance: string
-                created_at: string
-            }>
-        };
+        let result: { projects: Array<{ id: string; name: string; balance: string; created_at: string }> };
         try {
             result = await client.createSignedRequest('/api/v1/project/list', {});
+            printProjectList(result.projects);
         } catch (e: any) {
             handleRequestError(e, 'Failed to list projects');
-            process.exit(1);
         }
-        printProjectList(result.projects);
     });
 
 projectCommand
@@ -1343,8 +1416,26 @@ projectCommand
             process.exit(1);
         }
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${cfg.projectID}/logs/show`, {});
-        if (result) printProjectLog(result.logs);
+        const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${cfg.projectID}/logs/project`, {});
+        if (result) printLogs(result.logs, 'Project Logs');
+    });
+
+projectCommand
+    .command('resource-logs [nameOrIndex]')
+    .description('View resource logs from the cluster for this project')
+    .option('--resource <resource>', 'Resource type: frontend|backend|mongo|mysql')
+    .option('--since <period>', 'Time period (e.g. 1h)', '1h')
+    .option('--tail <lines>', 'Number of lines (1-10000)', '1000')
+    .option('--level <level>', 'Log level: all|error|warn|info', 'all')
+    .action(async (nameOrIndex, options) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        await fetchResourceLogs(cfg, {
+            resource: options.resource,
+            since: options.since,
+            tail: parseInt(options.tail, 10),
+            level: options.level
+        });
     });
 
 projectCommand
@@ -1359,19 +1450,19 @@ projectCommand
         }
         const client = await getAuthriteClientForConfig(cfg);
         const result = await safeRequest<{ deploys: string[] }>(client, `/api/v1/project/${cfg.projectID}/deploys/list`, {});
-        if (result && Array.isArray(result.deploys)) printReleasesList(result.deploys);
+        if (result && Array.isArray(result.deploys)) {
+            printReleasesList(result.deploys);
+        }
     });
 
-projectCommand
-    .action(async () => {
-        // If `cars project` is run without subcommands, show project menu
-        await projectMenu();
-    });
+projectCommand.action(async () => {
+    await projectMenu();
+});
 
 // release <subcommands>
 const releaseCommand = program
     .command('release')
-    .description('Manage releases via CARS');
+    .description('Manage releases');
 
 releaseCommand
     .command('get-upload-url [nameOrIndex]')
@@ -1379,7 +1470,6 @@ releaseCommand
     .action(async (nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
-
         if (!cfg.projectID) {
             console.error(chalk.red('❌ No project ID set in this configuration.'));
             process.exit(1);
@@ -1414,10 +1504,8 @@ releaseCommand
         if (!finalReleaseId) return;
 
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ logs: string }>(client, `/api/v1/deploy/${finalReleaseId}/logs/show`, {});
-        if (result && typeof result.logs === 'string') {
-            printReleaseLog(result.logs);
-        }
+        const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${cfg.projectID}/logs/deployment/${finalReleaseId}`, {});
+        if (result) printLogs(result.logs, 'Release Logs');
     });
 
 releaseCommand
@@ -1452,11 +1540,9 @@ releaseCommand
         }
     });
 
-releaseCommand
-    .action(async () => {
-        // If `cars release` is run without subcommands, show release menu
-        await releaseMenu();
-    });
+releaseCommand.action(async () => {
+    await releaseMenu();
+});
 
 // artifact <subcommands>
 const artifactCommand = program
@@ -1483,21 +1569,16 @@ artifactCommand
         console.log(chalk.green(`✅ Artifact "${artifactName}" deleted.`));
     });
 
-artifactCommand
-    .action(async () => {
-        // If `cars artifact` is run without subcommands, show artifact menu
-        await artifactMenu();
-    });
+artifactCommand.action(async () => {
+    await artifactMenu();
+});
 
 /**
  * If `cars` is invoked without args, enter the main menu.
  * If there are no CARS configs yet, walk through creation first.
  */
-
 (async function main() {
     if (process.argv.length <= 2) {
-        // No arguments provided
-        let info: CARSConfigInfo;
         if (!fs.existsSync(CONFIG_PATH)) {
             console.log(chalk.yellow('No deployment-info.json found. Creating a basic one.'));
             const basicInfo: CARSConfigInfo = {
@@ -1507,7 +1588,7 @@ artifactCommand
             saveCARSConfigInfo(basicInfo);
         }
 
-        info = loadCARSConfigInfo();
+        const info = loadCARSConfigInfo();
         if ((info.configs || []).filter(isCARSConfig).length === 0) {
             console.log(chalk.yellow('No CARS configurations found. Let’s create one.'));
             await addCARSConfigInteractive(info);
