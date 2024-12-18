@@ -867,6 +867,79 @@ async function fetchResourceLogs(config: CARSConfig, params?: { resource?: strin
 }
 
 /**
+ * Domain Linking (Custom Domains)
+ */
+
+// Print instructions
+function printDomainInstrictions(projectID: string, domain: string, domainType: 'frontend' | 'backend') {
+    console.log(chalk.blue('\nCustom Domain DNS Validation Instructions:'))
+    console.log(`Please create a DNS TXT record at:   cars_project.${domain}`)
+    console.log(`With the exact value (no quotes):    "cars-project-verification=${projectID}:${domainType}"`)
+    console.log('Once this TXT record is in place, continue with validation.\n');
+}
+
+// Set a custom domain for frontend or backend.
+// If validation fails, instructions are returned. For interactive mode, prompt user to try again after fixing DNS.
+async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'backend', domain: string, interactive: boolean) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set in this configuration.'));
+        return;
+    }
+
+    const client = await getAuthriteClientForConfig(config);
+
+    // If interactive, print instructions first
+    if (interactive) {
+        printDomainInstrictions(config.projectID, domain, domainType)
+
+        // Make sure they're ready to start the process
+        const { confirm } = await inquirer.prompt([
+            {
+                type: 'confirm',
+                name: 'confirm',
+                message: `Ready to proceed?`,
+                default: true
+            }
+        ]);
+
+        if (!confirm) {
+            return;
+        }
+    }
+
+    let retry = true;
+    while (retry) {
+        const result = await client.createSignedRequest(`/api/v1/project/${config.projectID}/domains/${domainType}`, { domain })
+
+        if (result.domain) {
+            console.log(chalk.green(`✅ ${domainType.charAt(0).toUpperCase() + domainType.slice(1)} custom domain set successfully.`));
+            return;
+        } else {
+            // If not interactive, just return after printing instructions
+            if (!interactive) {
+                return;
+            }
+
+            printDomainInstrictions(config.projectID, domain, domainType)
+
+            // Ask user if they want to try again after DNS is set
+            const { confirm } = await inquirer.prompt([
+                {
+                    type: 'confirm',
+                    name: 'confirm',
+                    message: `Give the TXT record some time to propagate, then retry. Want to try again now?`,
+                    default: false
+                }
+            ]);
+
+            if (!confirm) {
+                retry = false;
+            }
+        }
+    }
+}
+
+/**
  * Interactive Menus
  */
 
@@ -1003,6 +1076,8 @@ async function projectMenu() {
         { name: 'View Project Logs', value: 'logs-project' },
         { name: 'View Resource (Runtime) Logs', value: 'logs-resource' },
         { name: 'List Releases for a Project', value: 'releases' },
+        { name: 'Set Frontend Custom Domain', value: 'domain-frontend' },
+        { name: 'Set Backend Custom Domain', value: 'domain-backend' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -1092,6 +1167,18 @@ async function projectMenu() {
             if (result && Array.isArray(result.deploys)) {
                 printReleasesList(result.deploys);
             }
+        } else if (action === 'domain-frontend') {
+            const config = await pickCARSConfig(info);
+            const { domain } = await inquirer.prompt([
+                { type: 'input', name: 'domain', message: 'Enter the frontend domain (e.g. example.com):' }
+            ]);
+            await setCustomDomain(config, 'frontend', domain, true);
+        } else if (action === 'domain-backend') {
+            const config = await pickCARSConfig(info);
+            const { domain } = await inquirer.prompt([
+                { type: 'input', name: 'domain', message: 'Enter the backend domain (e.g. backend.example.com):' }
+            ]);
+            await setCustomDomain(config, 'backend', domain, true);
         } else {
             done = true;
         }
@@ -1453,6 +1540,25 @@ projectCommand
         if (result && Array.isArray(result.deploys)) {
             printReleasesList(result.deploys);
         }
+    });
+
+// Domain subcommands for non-interactive mode
+projectCommand
+    .command('domain:frontend <domain> [nameOrIndex]')
+    .description('Set the frontend custom domain for the project of the chosen configuration (non-interactive)')
+    .action(async (domain, nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        await setCustomDomain(cfg, 'frontend', domain, false);
+    });
+
+projectCommand
+    .command('domain:backend <domain> [nameOrIndex]')
+    .description('Set the backend custom domain for the project of the chosen configuration (non-interactive)')
+    .action(async (domain, nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        await setCustomDomain(cfg, 'backend', domain, false);
     });
 
 projectCommand.action(async () => {
