@@ -14,6 +14,7 @@ import Table from 'cli-table3';
 /**
  * Types
  */
+
 interface CARSConfigInfo {
     schema: string;
     schemaVersion: string;
@@ -36,9 +37,55 @@ interface CARSConfig {
     payments?: any;
 }
 
-/**
- * Constants
- */
+interface ProjectInfo {
+    id: string;
+    name: string;
+    network: string;
+    status: {
+        online: boolean;
+        lastChecked: string;
+        domains: { frontend?: string; backend?: string; ssl: boolean };
+        deploymentId: string | null;
+    };
+    billing: {
+        balance: number;
+    };
+    sslEnabled: boolean;
+    customDomains: {
+        frontend?: string;
+        backend?: string;
+    };
+    webUIConfig: any;
+}
+
+interface ProjectListing {
+    id: string;
+    name: string;
+    balance: string;
+    created_at: string;
+}
+
+interface AdminInfo {
+    identity_key: string;
+    email: string;
+    added_at: string;
+}
+
+interface DeployInfo {
+    deployment_uuid: string;
+    created_at: string;
+}
+
+interface AccountingRecord {
+    id: number;
+    project_id: number;
+    deploy_id?: number;
+    timestamp: string;
+    type: 'credit' | 'debit';
+    metadata: any;
+    amount_sats: string;
+    balance_after: string;
+}
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'deployment-info.json');
 const ARTIFACT_PREFIX = 'cars_artifact_';
@@ -98,14 +145,11 @@ function printAllConfigsWithIndex(info: CARSConfigInfo) {
         return;
     }
     console.log(chalk.blue('All configurations:'));
-    for (let i = 0; i < all.length; i++) {
-        const c = all[i];
-        if (isCARSConfig(c)) {
-            console.log(`${i}: ${c.name} [CARS] (CloudURL: ${c.CARSCloudURL}, ProjectID: ${c.projectID || 'none'})`);
-        } else {
-            console.log(chalk.grey(`${i}: ${c.name} (Provider: ${c.provider}, Non-CARS)`));
-        }
-    }
+    const table = new Table({ head: ['Index', 'Name', 'Provider', 'CARSCloudURL', 'ProjectID', 'Network'] });
+    all.forEach((c, i) => {
+        table.push([i.toString(), c.name, c.provider, c.CARSCloudURL || '', c.projectID || 'none', c.network || '']);
+    });
+    console.log(table.toString());
 }
 
 function findConfigByNameOrIndex(info: CARSConfigInfo, nameOrIndex: string): CARSConfig | undefined {
@@ -143,11 +187,11 @@ async function pickCARSConfig(info: CARSConfigInfo, nameOrIndex?: string): Promi
         return newCfg;
     }
 
-    const choices = carsConfigs.map((c, i) => {
-        const indexInAll = all.indexOf(c);
+    const choices = carsConfigs.map((c) => {
+        const idx = all.indexOf(c);
         return {
-            name: `${indexInAll}: ${c.name} (CloudURL: ${c.CARSCloudURL}, ProjectID: ${c.projectID || 'none'})`,
-            value: indexInAll
+            name: `${idx}: ${c.name} (CloudURL: ${c.CARSCloudURL}, ProjectID: ${c.projectID || 'none'})`,
+            value: idx
         };
     });
 
@@ -209,15 +253,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             }
         ]);
 
-        // Validate project ID by listing projects
-        let projects: {
-            projects: Array<{
-                id: string
-                name: string
-                balance: string
-                created_at: string
-            }>
-        };
+        let projects: { projects: ProjectListing[] };
         try {
             projects = await client.createSignedRequest('/api/v1/project/list', {});
         } catch (error: any) {
@@ -229,7 +265,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             console.error(chalk.red('❌ Invalid response from CARS Cloud when checking projects.'));
             process.exit(1);
         }
-        // Check if the projectID is indeed in the returned list.
+
         if (!projects.projects.some(x => x.id === projectID.trim())) {
             console.error(chalk.red(`❌ Project ID "${projectID}" not found on server ${cloudUrl}.`));
             process.exit(1);
@@ -237,7 +273,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
         return projectID.trim();
     } else {
         // Create new project
-        let result;
+        let result: any;
         try {
             result = await client.createSignedRequest('/api/v1/project/create', {});
         } catch (error: any) {
@@ -431,7 +467,6 @@ function deleteCARSConfig(info: CARSConfigInfo, config: CARSConfig) {
 /**
  * Build logic
  */
-
 async function buildArtifact(nameOrIndex?: string) {
     const carsConfigInfo = loadCARSConfigInfo();
     if (carsConfigInfo.schema !== 'bsv-app') {
@@ -444,7 +479,6 @@ async function buildArtifact(nameOrIndex?: string) {
     const deploy = activeConfig.deploy || [];
 
     console.log(chalk.blue('🛠  Building local project artifact...'));
-
     spawnSync('npm', ['i'], { stdio: 'inherit' });
 
     // Backend build
@@ -476,9 +510,7 @@ async function buildArtifact(nameOrIndex?: string) {
                     process.exit(1);
                 }
             } else {
-                // No contracts specified means maybe no compile needed, but we still build if script exists.
                 spawnSync('npm', ['i'], { cwd: 'backend', stdio: 'inherit' });
-                // We can just run build if it exists, else ignore
                 const backendPkg = JSON.parse(fs.readFileSync('backend/package.json', 'utf-8'));
                 if (backendPkg.scripts && backendPkg.scripts.build) {
                     const buildResult = spawnSync('npm', ['run', 'build'], { cwd: 'backend', stdio: 'inherit' });
@@ -651,23 +683,23 @@ function handleRequestError(error: any, contextMsg?: string) {
 /**
  * Data formatting
  */
-function printProjectList(projects: Array<{ id: string; name: string; balance: string; created_at: string }>) {
+function printProjectList(projects: ProjectListing[]) {
     if (!projects || projects.length === 0) {
         console.log(chalk.yellow('No projects found.'));
         return;
     }
-    const table = new Table({ head: ['Project ID', 'Name', 'Created', 'Balance'] });
-    projects.forEach(p => table.push([p.id, p.name, new Date(p.created_at).toLocaleString(), p.balance]));
+    const table = new Table({ head: ['Project ID', 'Name', 'Balance', 'Created'] });
+    projects.forEach(p => table.push([p.id, p.name, p.balance, new Date(p.created_at).toLocaleString()]));
     console.log(table.toString());
 }
 
-function printAdminsList(admins: string[]) {
+function printAdminsList(admins: AdminInfo[]) {
     if (!admins || admins.length === 0) {
         console.log(chalk.yellow('No admins found.'));
         return;
     }
-    const table = new Table({ head: ['Admin Identity Keys'] });
-    admins.forEach(a => table.push([a]));
+    const table = new Table({ head: ['Identity Key', 'Email', 'Added At'] });
+    admins.forEach(a => table.push([a.identity_key, a.email, new Date(a.added_at).toLocaleString()]));
     console.log(table.toString());
 }
 
@@ -676,13 +708,13 @@ function printLogs(log: string, title: string) {
     console.log(log.trim() || chalk.yellow('No logs yet.'));
 }
 
-function printReleasesList(releases: string[]) {
-    if (!releases || releases.length === 0) {
+function printReleasesList(deploys: DeployInfo[]) {
+    if (!deploys || deploys.length === 0) {
         console.log(chalk.yellow('No releases found.'));
         return;
     }
-    const table = new Table({ head: ['Release IDs'] });
-    releases.forEach(r => table.push([r]));
+    const table = new Table({ head: ['Release ID', 'Created At'] });
+    deploys.forEach(d => table.push([d.deployment_uuid, new Date(d.created_at).toLocaleString()]));
     console.log(table.toString());
 }
 
@@ -769,7 +801,7 @@ async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Pr
         return providedReleaseId;
     }
     const client = await getAuthriteClientForConfig(config);
-    const result = await safeRequest<{ deploys: string[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
+    const result = await safeRequest<{ deploys: DeployInfo[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
     if (!result || !Array.isArray(result.deploys) || result.deploys.length === 0) {
         console.log(chalk.yellow('No releases found. Cannot select a release ID.'));
         return undefined;
@@ -780,7 +812,10 @@ async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Pr
             type: 'list',
             name: 'chosenRelease',
             message: 'Select a release ID:',
-            choices: result.deploys.map(d => ({ name: d, value: d }))
+            choices: result.deploys.map(d => ({
+                name: `${d.deployment_uuid} (Created: ${new Date(d.created_at).toLocaleString()})`,
+                value: d.deployment_uuid
+            }))
         }
     ]);
 
@@ -888,7 +923,6 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
 
     const client = await getAuthriteClientForConfig(config);
 
-    // If interactive, print instructions first
     if (interactive) {
         printDomainInstrictions(config.projectID, domain, domainType)
 
@@ -909,17 +943,19 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
 
     let retry = true;
     while (retry) {
-        const result = await client.createSignedRequest(`/api/v1/project/${config.projectID}/domains/${domainType}`, { domain })
-
-        if (result.domain) {
-            console.log(chalk.green(`✅ ${domainType.charAt(0).toUpperCase() + domainType.slice(1)} custom domain set successfully.`));
-            return;
-        } else {
-            // If not interactive, just return after printing instructions
+        try {
+            const result: any = await client.createSignedRequest(`/api/v1/project/${config.projectID}/domains/${domainType}`, { domain });
+            if (result && result.domain) {
+                console.log(chalk.green(`✅ ${domainType.charAt(0).toUpperCase() + domainType.slice(1)} custom domain set successfully.`));
+                return;
+            } else {
+                throw new Error('No domain in response.');
+            }
+        } catch (error: any) {
             if (!interactive) {
+                handleRequestError(error, 'Domain verification failed');
                 return;
             }
-
             printDomainInstrictions(config.projectID, domain, domainType)
 
             // Ask user if they want to try again after DNS is set
@@ -927,7 +963,7 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
                 {
                     type: 'confirm',
                     name: 'confirm',
-                    message: `Give the TXT record some time to propagate, then retry. Want to try again now?`,
+                    message: `DNS not verified yet, allow some time to propagate. Try again now?`,
                     default: false
                 }
             ]);
@@ -940,16 +976,255 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
 }
 
 /**
- * Interactive Menus
+ * Web UI Config Management
  */
 
+async function viewAndEditWebUIConfig(config: CARSConfig) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set.'));
+        return;
+    }
+
+    const client = await getAuthriteClientForConfig(config);
+
+    // Fetch current info
+    const info = await safeRequest<ProjectInfo>(client, `/api/v1/project/${config.projectID}/info`, {});
+    if (!info) return;
+
+    let webUIConfig = info.webUIConfig || {};
+
+    // Interactive edit loop
+    let done = false;
+    while (!done) {
+        console.log(chalk.blue(`\nCurrent Web UI Config:`));
+        const table = new Table({ head: ['Key', 'Value'] });
+        Object.keys(webUIConfig).forEach(k => table.push([k, JSON.stringify(webUIConfig[k])]));
+        console.log(table.toString());
+
+        const choices = [
+            { name: 'Add/Update a key', value: 'update' },
+            { name: 'Remove a key', value: 'remove' },
+            { name: 'Done', value: 'done' }
+        ];
+
+        const { action } = await inquirer.prompt([
+            { type: 'list', name: 'action', message: 'What do you want to do?', choices }
+        ]);
+
+        if (action === 'done') {
+            done = true;
+        } else if (action === 'update') {
+            const { key } = await inquirer.prompt([
+                { type: 'input', name: 'key', message: 'Enter the key:' }
+            ]);
+            const { val } = await inquirer.prompt([
+                { type: 'input', name: 'val', message: 'Enter the value (JSON, string, number, etc.):' }
+            ]);
+            let parsedVal: any = val;
+            try {
+                parsedVal = JSON.parse(val);
+            } catch (ignore) {
+                // If not JSON, just use string
+            }
+            webUIConfig[key] = parsedVal;
+        } else if (action === 'remove') {
+            const keys = Object.keys(webUIConfig);
+            if (keys.length === 0) {
+                console.log(chalk.yellow('No keys to remove.'));
+                continue;
+            }
+            const { keyToRemove } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'keyToRemove',
+                    message: 'Select a key to remove:',
+                    choices: keys
+                }
+            ]);
+            delete webUIConfig[keyToRemove];
+        }
+
+        if (action !== 'done') {
+            // Update on server
+            const resp = await safeRequest(client, `/api/v1/project/${config.projectID}/webui/config`, { config: webUIConfig });
+            if (resp) {
+                console.log(chalk.green('✅ Web UI config updated.'));
+            }
+        }
+    }
+}
+
+/**
+ * Billing Stats
+ */
+async function viewBillingStats(config: CARSConfig) {
+    const client = await getAuthriteClientForConfig(config);
+
+    // Let user pick filters
+    const { start } = await inquirer.prompt([
+        { type: 'input', name: 'start', message: 'Start time (YYYY-MM-DD or empty for none):', default: '' }
+    ]);
+    const { end } = await inquirer.prompt([
+        { type: 'input', name: 'end', message: 'End time (YYYY-MM-DD or empty for none):', default: '' }
+    ]);
+    const { type } = await inquirer.prompt([
+        { type: 'list', name: 'type', message: 'Type of records to show:', choices: ['all', 'debit', 'credit'], default: 'all' }
+    ]);
+
+    const data: any = {};
+    if (start.trim()) data.start = new Date(start.trim()).toISOString();
+    if (end.trim()) data.end = new Date(end.trim()).toISOString();
+    if (type !== 'all') data.type = type;
+
+    const records = await safeRequest<{ records: AccountingRecord[] }>(client, `/api/v1/project/${config.projectID}/billing/stats`, data);
+    if (!records) return;
+
+    if (records.records.length === 0) {
+        console.log(chalk.yellow('No billing records found for specified filters.'));
+        return;
+    }
+
+    const table = new Table({ head: ['Timestamp', 'Type', 'Amount (sats)', 'Balance After', 'Metadata'] });
+    records.records.forEach(r => {
+        table.push([new Date(r.timestamp).toLocaleString(), r.type, r.amount_sats, r.balance_after, JSON.stringify(r.metadata, null, 2)]);
+    });
+    console.log(table.toString());
+}
+
+/**
+ * Project Info and Balance Checking
+ */
+async function showProjectInfo(config: CARSConfig) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set.'));
+        return;
+    }
+    const client = await getAuthriteClientForConfig(config);
+    const info = await safeRequest<ProjectInfo>(client, `/api/v1/project/${config.projectID}/info`, {});
+    if (!info) return;
+
+    console.log(chalk.magentaBright(`\nProject "${info.name}" (ID: ${info.id}) Info:`));
+    const table = new Table();
+    table.push(['Network', info.network]);
+    table.push(['Balance', info.billing.balance.toString()]);
+    table.push(['Online', info.status.online ? 'Yes' : 'No']);
+    table.push(['Last Checked', new Date(info.status.lastChecked).toLocaleString()]);
+    table.push(['Current Deployment', info.status.deploymentId || 'None']);
+    table.push(['SSL Enabled', info.sslEnabled ? 'Yes' : 'No']);
+    table.push(['Frontend Domain', info.status.domains.frontend || info.customDomains.frontend || 'None']);
+    table.push(['Backend Domain', info.status.domains.backend || info.customDomains.backend || 'None']);
+    console.log(table.toString());
+
+    if (info.webUIConfig) {
+        console.log(chalk.blue('\nWeb UI Config:'));
+        const wtable = new Table({ head: ['Key', 'Value'] });
+        Object.keys(info.webUIConfig).forEach(k => wtable.push([k, JSON.stringify(info.webUIConfig[k])]));
+        console.log(wtable.toString());
+    }
+
+    // Prompt to top up if balance is low
+    if (info.billing.balance < 50000) {
+        console.log(chalk.yellow('⚠ Your balance is low. Consider topping up to prevent disruptions.'));
+        const { confirm } = await inquirer.prompt([
+            {
+                type: 'confirm',
+                name: 'confirm',
+                message: 'Do you want to add funds now?',
+                default: true
+            }
+        ]);
+        if (confirm) {
+            await topUpProjectBalance(config);
+        }
+    }
+}
+
+/**
+ * Top up Project Balance
+ */
+async function topUpProjectBalance(config: CARSConfig) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set.'));
+        return;
+    }
+    const { amount } = await inquirer.prompt([
+        { type: 'number', name: 'amount', message: 'Enter amount in satoshis to add:', validate: (val: number) => val > 0 ? true : 'Amount must be positive.' }
+    ]);
+
+    const client = await getAuthriteClientForConfig(config);
+    // TODO: ACTUALLY PAY
+    const result = await safeRequest(client, `/api/v1/project/${config.projectID}/pay`, { amount });
+    if (result) {
+        console.log(chalk.green(`✅ Balance topped up by ${amount} sats.`));
+    }
+}
+
+/**
+ * Delete Project
+ */
+async function deleteProject(config: CARSConfig) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set.'));
+        return;
+    }
+    const { confirm } = await inquirer.prompt([
+        { type: 'confirm', name: 'confirm', message: 'Are you ABSOLUTELY CERTAIN that you want to delete this project (this cannot be undone)?', default: false }
+    ]);
+    if (!confirm) return;
+
+    const { confirmAgain } = await inquirer.prompt([
+        { type: 'confirm', name: 'confirmAgain', message: 'Really delete the entire project and all its data permanently?', default: false }
+    ]);
+    if (!confirmAgain) return;
+
+    const client = await getAuthriteClientForConfig(config);
+    const result = await safeRequest(client, `/api/v1/project/${config.projectID}/delete`, {});
+    if (result) {
+        console.log(chalk.green('✅ Project deleted.'));
+    }
+}
+
+/**
+ * Global Public Info
+ */
+async function showGlobalPublicInfo() {
+    const info = loadCARSConfigInfo();
+    const chosenURL = await chooseCARSCloudURL(info);
+    const spinner = ora('Fetching global public info...').start();
+    try {
+        const res = await axios.get(`${chosenURL}/api/v1/public`);
+        spinner.succeed('✅ Fetched global info:');
+        const data = res.data;
+        console.log(chalk.blue('Mainnet Public Key:'), data.mainnetPublicKey);
+        console.log(chalk.blue('Testnet Public Key:'), data.testnetPublicKey);
+        console.log(chalk.blue('Pricing:'));
+        const table = new Table({ head: ['Resource', 'Cost (per 5m)'] });
+        table.push(['CPU (per core)', data.pricing.cpu_rate_per_5min + ' sat']);
+        table.push(['Memory (per GB)', data.pricing.mem_rate_per_gb_5min + ' sat']);
+        table.push(['Disk (per GB)', data.pricing.disk_rate_per_gb_5min + ' sat']);
+        table.push(['Network (per GB)', data.pricing.net_rate_per_gb_5min + ' sat']);
+        console.log(table.toString());
+        console.log(chalk.blue('Project Deployment Domain:'), data.projectDeploymentDomain);
+    } catch (error: any) {
+        spinner.fail('❌ Failed to fetch public info.');
+        handleRequestError(error);
+    }
+}
+
+/**
+ * Menus
+ */
 async function mainMenu() {
+    console.log(chalk.cyanBright(`\nWelcome to CARS CLI ⚡`));
+    console.log(chalk.cyan(`Your Deployment Companion for Bitcoin-Powered Clouds\n`));
+
     const info = loadCARSConfigInfo();
     const choices = [
         { name: 'Manage CARS Configurations', value: 'config' },
         { name: 'Manage Projects', value: 'project' },
         { name: 'Manage Releases', value: 'release' },
         { name: 'Manage Artifacts', value: 'artifact' },
+        { name: 'View Global Info (Public Keys, Pricing)', value: 'global-info' },
         { name: 'Build Artifact', value: 'build' },
         { name: 'Exit', value: 'exit' }
     ];
@@ -973,6 +1248,8 @@ async function mainMenu() {
             await releaseMenu();
         } else if (action === 'artifact') {
             await artifactMenu();
+        } else if (action === 'global-info') {
+            await showGlobalPublicInfo();
         } else if (action === 'build') {
             await buildArtifact();
         } else {
@@ -1070,14 +1347,19 @@ async function projectMenu() {
 
     const choices = [
         { name: 'List Projects', value: 'ls' },
-        { name: 'Add Admin to a Project', value: 'add-admin' },
-        { name: 'Remove Admin from a Project', value: 'remove-admin' },
-        { name: 'List Admins of a Project', value: 'list-admins' },
+        { name: 'View Project Info', value: 'info' },
+        { name: 'Add Admin', value: 'add-admin' },
+        { name: 'Remove Admin', value: 'remove-admin' },
+        { name: 'List Admins', value: 'list-admins' },
         { name: 'View Project Logs', value: 'logs-project' },
         { name: 'View Resource (Runtime) Logs', value: 'logs-resource' },
-        { name: 'List Releases for a Project', value: 'releases' },
+        { name: 'List Releases', value: 'releases' },
         { name: 'Set Frontend Custom Domain', value: 'domain-frontend' },
         { name: 'Set Backend Custom Domain', value: 'domain-backend' },
+        { name: 'View/Edit Web UI Config', value: 'webui-config' },
+        { name: 'Billing: View Stats', value: 'billing-stats' },
+        { name: 'Billing: Top Up Balance', value: 'topup' },
+        { name: 'Delete Project', value: 'delete' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -1096,58 +1378,72 @@ async function projectMenu() {
             const chosenURL = await chooseCARSCloudURL(info);
             const client = new AuthriteClient(chosenURL);
             await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
-            let result: { projects: Array<{ id: string; name: string; balance: string; created_at: string }> };
+            let result: { projects: ProjectListing[] };
             try {
                 result = await client.createSignedRequest('/api/v1/project/list', {});
                 printProjectList(result.projects);
             } catch (e: any) {
                 handleRequestError(e, 'Failed to list projects');
             }
+        } else if (action === 'info') {
+            const config = await pickCARSConfig(info);
+            await showProjectInfo(config);
         } else if (action === 'add-admin') {
             const config = await pickCARSConfig(info);
-            if (!config.projectID) {
-                console.error(chalk.red('❌ No project ID set in this configuration.'));
-                continue;
-            }
-            const { identityKey } = await inquirer.prompt([
-                { type: 'input', name: 'identityKey', message: 'Enter Identity Key of the user to add as admin:' }
-            ]);
+            if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
+
+            // Fetch admins first
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest(client, `/api/v1/project/${config.projectID}/addAdmin`, { identityKey });
-            if (result) {
-                console.log(chalk.green('✅ Admin added successfully.'));
+            const userResp = await client.createSignedRequest('/api/v1/project/list', {});
+            console.log(chalk.yellow('Please enter Identity Key or Email of the user to add as admin:'));
+            const { identityKeyOrEmail } = await inquirer.prompt([
+                { type: 'input', name: 'identityKeyOrEmail', message: 'IdentityKey or Email:' }
+            ]);
+            const result = await safeRequest(client, `/api/v1/project/${config.projectID}/addAdmin`, { identityKeyOrEmail });
+            if (result.message) {
+                console.log(chalk.green(`✅ ${result.message}`));
+            } else {
+                console.error(chalk.red(`❌ ${result.error || 'Could not add project admin.'}`));
             }
         } else if (action === 'remove-admin') {
             const config = await pickCARSConfig(info);
-            if (!config.projectID) {
-                console.error(chalk.red('❌ No project ID set in this configuration.'));
-                continue;
-            }
-            const { identityKey } = await inquirer.prompt([
-                { type: 'input', name: 'identityKey', message: 'Enter Identity Key of the admin to remove:' }
-            ]);
+            if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest(client, `/api/v1/project/${config.projectID}/removeAdmin`, { identityKey });
+            const result = await safeRequest<{ admins: AdminInfo[] }>(client, `/api/v1/project/${config.projectID}/admins/list`, {});
             if (result) {
-                console.log(chalk.green('✅ Admin removed successfully.'));
+                if (result.admins.length === 0) {
+                    console.log(chalk.yellow('No admins found.'));
+                    continue;
+                }
+                const { chosenAdmin } = await inquirer.prompt([
+                    {
+                        type: 'list',
+                        name: 'chosenAdmin',
+                        message: 'Select admin to remove:',
+                        choices: result.admins.map(a => ({
+                            name: `${a.identity_key} (${a.email}) added at ${new Date(a.added_at).toLocaleString()}`,
+                            value: a.identity_key
+                        }))
+                    }
+                ]);
+                const rmResult = await safeRequest(client, `/api/v1/project/${config.projectID}/removeAdmin`, { identityKeyOrEmail: chosenAdmin });
+                if (rmResult.message) {
+                    console.log(chalk.green(`✅ ${rmResult.message}`));
+                } else {
+                    console.error(chalk.red(`❌ ${rmResult.error || 'Could not remove project admin.'}`));
+                }
             }
         } else if (action === 'list-admins') {
             const config = await pickCARSConfig(info);
-            if (!config.projectID) {
-                console.error(chalk.red('❌ No project ID set in this configuration.'));
-                continue;
-            }
+            if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ admins: string[] }>(client, `/api/v1/project/${config.projectID}/admins/list`, {});
+            const result = await safeRequest<{ admins: AdminInfo[] }>(client, `/api/v1/project/${config.projectID}/admins/list`, {});
             if (result && result.admins) {
                 printAdminsList(result.admins);
             }
         } else if (action === 'logs-project') {
             const config = await pickCARSConfig(info);
-            if (!config.projectID) {
-                console.error(chalk.red('❌ No project ID set in this configuration.'));
-                continue;
-            }
+            if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
             const client = await getAuthriteClientForConfig(config);
             const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/project`, {});
             if (result && typeof result.logs === 'string') {
@@ -1158,12 +1454,9 @@ async function projectMenu() {
             await fetchResourceLogs(config);
         } else if (action === 'releases') {
             const config = await pickCARSConfig(info);
-            if (!config.projectID) {
-                console.error(chalk.red('❌ No project ID set.'));
-                continue;
-            }
+            if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
             const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ deploys: string[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
+            const result = await safeRequest<{ deploys: DeployInfo[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
             if (result && Array.isArray(result.deploys)) {
                 printReleasesList(result.deploys);
             }
@@ -1179,6 +1472,18 @@ async function projectMenu() {
                 { type: 'input', name: 'domain', message: 'Enter the backend domain (e.g. backend.example.com):' }
             ]);
             await setCustomDomain(config, 'backend', domain, true);
+        } else if (action === 'webui-config') {
+            const config = await pickCARSConfig(info);
+            await viewAndEditWebUIConfig(config);
+        } else if (action === 'billing-stats') {
+            const config = await pickCARSConfig(info);
+            await viewBillingStats(config);
+        } else if (action === 'topup') {
+            const config = await pickCARSConfig(info);
+            await topUpProjectBalance(config);
+        } else if (action === 'delete') {
+            const config = await pickCARSConfig(info);
+            await deleteProject(config);
         } else {
             done = true;
         }
@@ -1187,7 +1492,6 @@ async function projectMenu() {
 
 async function releaseMenu() {
     const info = loadCARSConfigInfo();
-
     const choices = [
         { name: 'Auto-create new release and upload latest artifact now', value: 'now' },
         { name: 'View logs for a release', value: 'logs' },
@@ -1358,7 +1662,7 @@ async function uploadArtifact(uploadURL: string, artifactPath: string) {
  * CLI Definition
  */
 
-// cars config <subcommands>
+// CARS config management
 const configCommand = program
     .command('config')
     .description('Manage CARS configurations in deployment-info.json');
@@ -1398,7 +1702,7 @@ configCommand
 
 configCommand
     .command('delete <nameOrIndex>')
-    .description('Delete a configuration')
+    .description('Delete a CARS configuration')
     .action((nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const cfg = findConfigByNameOrIndex(info, nameOrIndex);
@@ -1417,7 +1721,8 @@ configCommand.action(async () => {
     await configMenu();
 });
 
-// build
+
+// Build local artifact
 program
     .command('build [nameOrIndex]')
     .description('Build local artifact for release')
@@ -1425,11 +1730,13 @@ program
         await buildArtifact(nameOrIndex);
     });
 
-// project <subcommands>
+
+// Project management
 const projectCommand = program
     .command('project')
     .description('Manage projects');
 
+// List projects
 projectCommand
     .command('ls [nameOrIndex]')
     .description('List all projects on a chosen CARS Cloud server')
@@ -1438,19 +1745,29 @@ projectCommand
         const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
         const client = new AuthriteClient(chosenURL);
         await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
-        let result: { projects: Array<{ id: string; name: string; balance: string; created_at: string }> };
         try {
-            result = await client.createSignedRequest('/api/v1/project/list', {});
+            const result = await client.createSignedRequest('/api/v1/project/list', {});
             printProjectList(result.projects);
         } catch (e: any) {
             handleRequestError(e, 'Failed to list projects');
         }
     });
 
+// Show project info
 projectCommand
-    .command('add-admin <identityKey> [nameOrIndex]')
+    .command('info [nameOrIndex]')
+    .description('Show detailed info about the project in the chosen configuration')
+    .action(async (nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        await showProjectInfo(cfg);
+    });
+
+// Add admin
+projectCommand
+    .command('add-admin <identityKeyOrEmail> [nameOrIndex]')
     .description('Add an admin to the project of the chosen configuration')
-    .action(async (identityKey, nameOrIndex) => {
+    .action(async (identityKeyOrEmail, nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -1458,14 +1775,19 @@ projectCommand
             process.exit(1);
         }
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/addAdmin`, { identityKey });
-        if (result) console.log(chalk.green('✅ Admin added.'));
+        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/addAdmin`, { identityKeyOrEmail });
+        if (result.message) {
+            console.log(chalk.green(`✅ ${result.message}`));
+        } else {
+            console.error(chalk.red(`❌ ${result.error || 'Could not add project admin.'}`));
+        }
     });
 
+// Remove admin
 projectCommand
-    .command('remove-admin <identityKey> [nameOrIndex]')
+    .command('remove-admin <identityKeyOrEmail> [nameOrIndex]')
     .description('Remove an admin from the project of the chosen configuration')
-    .action(async (identityKey, nameOrIndex) => {
+    .action(async (identityKeyOrEmail, nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -1473,10 +1795,15 @@ projectCommand
             process.exit(1);
         }
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/removeAdmin`, { identityKey });
-        if (result) console.log(chalk.green('✅ Admin removed.'));
+        const rmResult = await safeRequest(client, `/api/v1/project/${cfg.projectID}/removeAdmin`, { identityKeyOrEmail });
+        if (rmResult.message) {
+            console.log(chalk.green(`✅ ${rmResult.message}`));
+        } else {
+            console.error(chalk.red(`❌ ${rmResult.error || 'Could not remove project admin.'}`));
+        }
     });
 
+// List admins
 projectCommand
     .command('list-admins [nameOrIndex]')
     .description('List the admins for the project of the chosen configuration')
@@ -1488,10 +1815,11 @@ projectCommand
             process.exit(1);
         }
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ admins: string[] }>(client, `/api/v1/project/${cfg.projectID}/admins/list`, {});
-        if (result) printAdminsList(result.admins);
+        const result = await safeRequest<{ admins: AdminInfo[] }>(client, `/api/v1/project/${cfg.projectID}/admins/list`, {});
+        if (result && result.admins) printAdminsList(result.admins);
     });
 
+// Project logs
 projectCommand
     .command('logs [nameOrIndex]')
     .description('View logs of the project from the chosen configuration')
@@ -1507,11 +1835,12 @@ projectCommand
         if (result) printLogs(result.logs, 'Project Logs');
     });
 
+// Resource logs
 projectCommand
     .command('resource-logs [nameOrIndex]')
     .description('View resource logs from the cluster for this project')
     .option('--resource <resource>', 'Resource type: frontend|backend|mongo|mysql')
-    .option('--since <period>', 'Time period (e.g. 1h)', '1h')
+    .option('--since <period>', 'Time period (one of: 5m,15m,30m,1h,2h,6h,12h,1d,2d,7d)', '1h')
     .option('--tail <lines>', 'Number of lines (1-10000)', '1000')
     .option('--level <level>', 'Log level: all|error|warn|info', 'all')
     .action(async (nameOrIndex, options) => {
@@ -1525,6 +1854,7 @@ projectCommand
         });
     });
 
+// List releases
 projectCommand
     .command('releases [nameOrIndex]')
     .description('List all releases for the project from the chosen configuration')
@@ -1536,13 +1866,13 @@ projectCommand
             process.exit(1);
         }
         const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ deploys: string[] }>(client, `/api/v1/project/${cfg.projectID}/deploys/list`, {});
+        const result = await safeRequest<{ deploys: DeployInfo[] }>(client, `/api/v1/project/${cfg.projectID}/deploys/list`, {});
         if (result && Array.isArray(result.deploys)) {
             printReleasesList(result.deploys);
         }
     });
 
-// Domain subcommands for non-interactive mode
+// Set frontend domain non-interactive
 projectCommand
     .command('domain:frontend <domain> [nameOrIndex]')
     .description('Set the frontend custom domain for the project of the chosen configuration (non-interactive)')
@@ -1552,6 +1882,7 @@ projectCommand
         await setCustomDomain(cfg, 'frontend', domain, false);
     });
 
+// Set backend domain non-interactive
 projectCommand
     .command('domain:backend <domain> [nameOrIndex]')
     .description('Set the backend custom domain for the project of the chosen configuration (non-interactive)')
@@ -1561,15 +1892,199 @@ projectCommand
         await setCustomDomain(cfg, 'backend', domain, false);
     });
 
+// Web UI config: view
+projectCommand
+    .command('webui-config:view [nameOrIndex]')
+    .description('View the current Web UI config of the project')
+    .action(async (nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID.'));
+            process.exit(1);
+        }
+        const client = await getAuthriteClientForConfig(cfg);
+        const projectInfo = await safeRequest<ProjectInfo>(client, `/api/v1/project/${cfg.projectID}/info`, {});
+        if (projectInfo && projectInfo.webUIConfig) {
+            const wtable = new Table({ head: ['Key', 'Value'] });
+            Object.keys(projectInfo.webUIConfig).forEach(k => wtable.push([k, JSON.stringify(projectInfo.webUIConfig[k])]));
+            console.log(wtable.toString());
+        } else {
+            console.log(chalk.yellow('No Web UI config found.'));
+        }
+    });
+
+// Web UI config: set key
+projectCommand
+    .command('webui-config:set <key> <value> [nameOrIndex]')
+    .description('Set (add/update) a key in the Web UI config of the project')
+    .action(async (key, value, nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID.'));
+            process.exit(1);
+        }
+
+        let parsedVal: any = value;
+        try {
+            parsedVal = JSON.parse(value);
+        } catch (_) {
+            // Not JSON, treat as string
+        }
+
+        const client = await getAuthriteClientForConfig(cfg);
+        const projectInfo = await safeRequest<ProjectInfo>(client, `/api/v1/project/${cfg.projectID}/info`, {});
+        if (!projectInfo) return;
+        const webUIConfig = projectInfo.webUIConfig || {};
+        webUIConfig[key] = parsedVal;
+
+        const resp = await safeRequest(client, `/api/v1/project/${cfg.projectID}/webui/config`, { config: webUIConfig });
+        if (resp) {
+            console.log(chalk.green('✅ Web UI config updated.'));
+        }
+    });
+
+// Web UI config: delete key
+projectCommand
+    .command('webui-config:delete <key> [nameOrIndex]')
+    .description('Delete a key from the Web UI config of the project')
+    .action(async (key, nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID.'));
+            process.exit(1);
+        }
+
+        const client = await getAuthriteClientForConfig(cfg);
+        const projectInfo = await safeRequest<ProjectInfo>(client, `/api/v1/project/${cfg.projectID}/info`, {});
+        if (!projectInfo) return;
+        const webUIConfig = projectInfo.webUIConfig || {};
+        if (!(key in webUIConfig)) {
+            console.log(chalk.yellow(`Key "${key}" not found in config.`));
+            return;
+        }
+        delete webUIConfig[key];
+
+        const resp = await safeRequest(client, `/api/v1/project/${cfg.projectID}/webui/config`, { config: webUIConfig });
+        if (resp) {
+            console.log(chalk.green('✅ Web UI config updated.'));
+        }
+    });
+
+// Billing stats
+projectCommand
+    .command('billing-stats [nameOrIndex]')
+    .description('View billing statistics for the project. You can specify filters with options.')
+    .option('--start <date>', 'Start date (YYYY-MM-DD)')
+    .option('--end <date>', 'End date (YYYY-MM-DD)')
+    .option('--type <type>', 'Type of records: all|debit|credit', 'all')
+    .action(async (nameOrIndex, options) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID set.'));
+            process.exit(1);
+        }
+
+        const data: any = {};
+        if (options.start) data.start = new Date(options.start.trim()).toISOString();
+        if (options.end) data.end = new Date(options.end.trim()).toISOString();
+        if (options.type && options.type !== 'all') data.type = options.type;
+
+        const client = await getAuthriteClientForConfig(cfg);
+        const records = await safeRequest<{ records: AccountingRecord[] }>(client, `/api/v1/project/${cfg.projectID}/billing/stats`, data);
+        if (!records) return;
+
+        if (records.records.length === 0) {
+            console.log(chalk.yellow('No billing records found for specified filters.'));
+            return;
+        }
+
+        const table = new Table({ head: ['Timestamp', 'Type', 'Amount (sats)', 'Balance After', 'Metadata'] });
+        records.records.forEach(r => {
+            table.push([new Date(r.timestamp).toLocaleString(), r.type, r.amount_sats, r.balance_after, JSON.stringify(r.metadata, null, 2)]);
+        });
+        console.log(table.toString());
+    });
+
+// Top up balance
+projectCommand
+    .command('topup [nameOrIndex]')
+    .description('Top up the project balance. If --amount is not specified, you will be prompted.')
+    .option('--amount <sats>', 'Amount in satoshis to add')
+    .action(async (nameOrIndex, options) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID set.'));
+            process.exit(1);
+        }
+
+        let amount = options.amount ? parseInt(options.amount, 10) : undefined;
+        if (!amount || amount <= 0) {
+            const answers = await inquirer.prompt([
+                { type: 'number', name: 'amount', message: 'Enter amount in satoshis to add:', validate: (val: number) => val > 0 ? true : 'Amount must be positive.' }
+            ]);
+            amount = answers.amount;
+        }
+
+        const client = await getAuthriteClientForConfig(cfg);
+
+        // TODO: ACTUALLY IMPLEMENT PAYMENT
+        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/pay`, { amount });
+        if (result) {
+            console.log(chalk.green(`✅ Balance topped up by ${amount} sats.`));
+        }
+    });
+
+// Delete project
+projectCommand
+    .command('delete [nameOrIndex]')
+    .description('Delete the project. This cannot be undone. Use --force to confirm.')
+    .option('--force', 'Skip confirmation prompts')
+    .action(async (nameOrIndex, options) => {
+        const info = loadCARSConfigInfo();
+        const cfg = await pickCARSConfig(info, nameOrIndex);
+
+        if (!cfg.projectID) {
+            console.error(chalk.red('❌ No project ID set.'));
+            process.exit(1);
+        }
+
+        if (!options.force) {
+            const { confirm } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirm', message: 'Are you ABSOLUTELY SURE you want to delete this project?', default: false }
+            ]);
+            if (!confirm) return;
+
+            const { confirmAgain } = await inquirer.prompt([
+                { type: 'confirm', name: 'confirmAgain', message: 'Really delete the entire project and all its data permanently?', default: false }
+            ]);
+            if (!confirmAgain) return;
+        }
+
+        const client = await getAuthriteClientForConfig(cfg);
+        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/delete`, {});
+        if (result) {
+            console.log(chalk.green('✅ Project deleted.'));
+        }
+    });
+
 projectCommand.action(async () => {
     await projectMenu();
 });
 
-// release <subcommands>
+
+// Release management
 const releaseCommand = program
     .command('release')
     .description('Manage releases');
 
+// Get upload URL for a new release
 releaseCommand
     .command('get-upload-url [nameOrIndex]')
     .description('Create a new release for a chosen CARS configuration and get the upload URL')
@@ -1577,7 +2092,7 @@ releaseCommand
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
-            console.error(chalk.red('❌ No project ID set in this configuration.'));
+            console.error(chalk.red('❌ No project ID set.'));
             process.exit(1);
         }
         const client = await getAuthriteClientForConfig(cfg);
@@ -1588,6 +2103,7 @@ releaseCommand
         }
     });
 
+// Upload artifact to given URL
 releaseCommand
     .command('upload-files <uploadURL> <artifactPath>')
     .description('Upload a built artifact to the given URL')
@@ -1595,6 +2111,7 @@ releaseCommand
         await uploadArtifact(uploadURL, artifactPath);
     });
 
+// View logs of a release
 releaseCommand
     .command('logs [releaseId] [nameOrIndex]')
     .description('View logs of a release by its ID. If no releaseId is provided, select from a menu.')
@@ -1602,7 +2119,7 @@ releaseCommand
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
-            console.error(chalk.red('❌ No project ID set in this configuration.'));
+            console.error(chalk.red('❌ No project ID set.'));
             process.exit(1);
         }
 
@@ -1614,15 +2131,16 @@ releaseCommand
         if (result) printLogs(result.logs, 'Release Logs');
     });
 
+// Create new release and upload latest artifact immediately
 releaseCommand
     .command('now [nameOrIndex]')
-    .description('Upload the latest artifact directly to the chosen CARS configuration as a new release')
+    .description('Create a new release and automatically upload the latest artifact')
     .action(async (nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
 
         if (!cfg.projectID) {
-            console.error(chalk.red('❌ No project ID set in this configuration.'));
+            console.error(chalk.red('❌ No project ID set.'));
             process.exit(1);
         }
 
@@ -1650,7 +2168,8 @@ releaseCommand.action(async () => {
     await releaseMenu();
 });
 
-// artifact <subcommands>
+
+// Artifact management
 const artifactCommand = program
     .command('artifact')
     .description('Manage CARS artifacts');
@@ -1679,10 +2198,37 @@ artifactCommand.action(async () => {
     await artifactMenu();
 });
 
-/**
- * If `cars` is invoked without args, enter the main menu.
- * If there are no CARS configs yet, walk through creation first.
- */
+
+// Global public info
+program
+    .command('global-info [nameOrIndex]')
+    .description('View global public info (public keys, pricing, etc.) from a chosen CARS Cloud')
+    .action(async (nameOrIndex) => {
+        const info = loadCARSConfigInfo();
+        const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
+        const spinner = ora('Fetching global public info...').start();
+        try {
+            const res = await axios.get(`${chosenURL}/api/v1/public`);
+            spinner.succeed('✅ Fetched global info:');
+            const data = res.data;
+            console.log(chalk.blue('Mainnet Public Key:'), data.mainnetPublicKey);
+            console.log(chalk.blue('Testnet Public Key:'), data.testnetPublicKey);
+            console.log(chalk.blue('Pricing:'));
+            const table = new Table({ head: ['Resource', 'Cost (per 5m)'] });
+            table.push(['CPU (per core)', data.pricing.cpu_rate_per_5min + ' sat']);
+            table.push(['Memory (per GB)', data.pricing.mem_rate_per_gb_5min + ' sat']);
+            table.push(['Disk (per GB)', data.pricing.disk_rate_per_gb_5min + ' sat']);
+            table.push(['Network (per GB)', data.pricing.net_rate_per_gb_5min + ' sat']);
+            console.log(table.toString());
+            console.log(chalk.blue('Project Deployment Domain:'), data.projectDeploymentDomain);
+        } catch (error: any) {
+            spinner.fail('❌ Failed to fetch public info.');
+            handleRequestError(error);
+        }
+    });
+
+
+// If `cars` is invoked without args, enter the main menu
 (async function main() {
     if (process.argv.length <= 2) {
         if (!fs.existsSync(CONFIG_PATH)) {
@@ -1700,7 +2246,7 @@ artifactCommand.action(async () => {
             await addCARSConfigInteractive(info);
         }
 
-        // Now enter main menu
+        // Enter main menu interactively
         await mainMenu();
     } else {
         program.parse(process.argv);
