@@ -1573,19 +1573,7 @@ async function releaseMenu() {
             const client = await getAuthriteClientForConfig(config);
             const result = await safeRequest<{ url: string, deploymentId: string }>(client, `/api/v1/project/${config.projectID}/deploy`, {});
             if (result && result.url && result.deploymentId) {
-                const spinner = ora('Uploading artifact...').start();
-                const artifactData = fs.readFileSync(artifactPath);
-                try {
-                    await axios.post(result.url, artifactData, {
-                        headers: {
-                            'Content-Type': 'application/octet-stream'
-                        }
-                    });
-                    spinner.succeed('✅ Artifact uploaded successfully.');
-                } catch (error: any) {
-                    spinner.fail('❌ Artifact upload failed.');
-                    handleRequestError(error);
-                }
+                await uploadArtifact(result.url, artifactPath);
             }
         } else {
             done = true;
@@ -1636,7 +1624,11 @@ async function artifactMenu() {
 }
 
 /**
- * Upload Artifact Helper
+ * Upload Artifact
+ * 
+ * @param uploadURL The URL to upload the artifact to
+ * @param artifactPath The path to the artifact file
+ * 
  */
 async function uploadArtifact(uploadURL: string, artifactPath: string) {
     if (!fs.existsSync(artifactPath)) {
@@ -1649,7 +1641,7 @@ async function uploadArtifact(uploadURL: string, artifactPath: string) {
         await axios.post(uploadURL, artifactData, {
             headers: {
                 'Content-Type': 'application/octet-stream'
-            }
+            },
         });
         spinner.succeed('✅ Artifact uploaded successfully.');
     } catch (error: any) {
@@ -2148,19 +2140,7 @@ releaseCommand
         const client = await getAuthriteClientForConfig(cfg);
         const result = await safeRequest<{ url: string, deploymentId: string }>(client, `/api/v1/project/${cfg.projectID}/deploy`, {});
         if (result && result.url && result.deploymentId) {
-            const spinner = ora('Uploading artifact...').start();
-            const artifactData = fs.readFileSync(artifactPath);
-            try {
-                await axios.post(result.url, artifactData, {
-                    headers: {
-                        'Content-Type': 'application/octet-stream'
-                    }
-                });
-                spinner.succeed('✅ Artifact uploaded successfully.');
-            } catch (error: any) {
-                spinner.fail('❌ Artifact upload failed.');
-                handleRequestError(error);
-            }
+            await uploadArtifact(result.url, artifactPath);
         }
     });
 
