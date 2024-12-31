@@ -295,11 +295,10 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
  */
 async function addCARSConfigInteractive(info: CARSConfigInfo): Promise<CARSConfig> {
     const cloudChoices = [
-        { name: 'localhost:7777', value: 'http://localhost:7777' },
-        { name: 'cars-cloud1.com', value: 'https://cars-cloud1.com' },
-        { name: 'cars-cloud2.com', value: 'https://cars-cloud2.com' },
-        { name: 'cars-cloud3.com', value: 'https://cars-cloud3.com' },
-        { name: 'Custom', value: 'custom' }
+        { name: 'Babbage (cars.babbage.systems)', value: 'https://cars.babbage.systems' },
+        { name: 'ATX (cars.atx.systems)', value: 'https://cars.atx.systems' },
+        { name: 'Enter Custom URL', value: 'custom' },
+        { name: 'Local (dev) localhost:7777', value: 'http://localhost:7777' },
     ];
 
     const { name, cloudUrlChoice, customCloudUrl, network, deployTargets } = await inquirer.prompt([
