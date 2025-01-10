@@ -1210,6 +1210,193 @@ async function showGlobalPublicInfo() {
     }
 }
 
+// Interactive editing for advanced engine config
+async function editAdvancedEngineConfig(config: CARSConfig) {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set.'));
+        return;
+    }
+    const client = await getAuthriteClientForConfig(config);
+
+    // We fetch the current engine config from the project info
+    const infoResp = await safeRequest<any>(client, `/api/v1/project/${config.projectID}/info`, {});
+    if (!infoResp) return;
+    let engineConfig: any = {};
+    if (infoResp.engine_config) {
+        engineConfig = infoResp.engine_config;
+    } else {
+        engineConfig = {};
+    }
+    if (!engineConfig || typeof engineConfig !== 'object') {
+        engineConfig = {};
+    }
+
+    let done = false;
+    while (!done) {
+        console.log(chalk.blue('\nCurrent Engine Config:'));
+        console.log(JSON.stringify(engineConfig, null, 2));
+
+        const choices = [
+            { name: 'Toggle requestLogging', value: 'requestLogging' },
+            { name: 'Toggle gaspSync', value: 'gaspSync' },
+            { name: 'Toggle logTime', value: 'logTime' },
+            { name: 'Set logPrefix', value: 'logPrefix' },
+            { name: 'Toggle throwOnBroadcastFailure', value: 'throwFail' },
+            { name: 'Edit syncConfiguration', value: 'syncConfig' },
+            { name: 'Done', value: 'done' }
+        ];
+
+        const { action } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'action',
+                message: 'Select an advanced config to edit:',
+                choices
+            }
+        ]);
+
+        if (action === 'done') {
+            done = true;
+        } else if (action === 'requestLogging') {
+            engineConfig.requestLogging = !engineConfig.requestLogging;
+        } else if (action === 'gaspSync') {
+            engineConfig.gaspSync = !engineConfig.gaspSync;
+        } else if (action === 'logTime') {
+            engineConfig.logTime = !engineConfig.logTime;
+        } else if (action === 'logPrefix') {
+            const { prefix } = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'prefix',
+                    message: 'Enter new log prefix:',
+                    default: engineConfig.logPrefix || '[CARS OVERLAY ENGINE] '
+                }
+            ]);
+            engineConfig.logPrefix = prefix;
+        } else if (action === 'throwFail') {
+            engineConfig.throwOnBroadcastFailure = !engineConfig.throwOnBroadcastFailure;
+        } else if (action === 'syncConfig') {
+            await editSyncConfiguration(engineConfig);
+        }
+
+        // Immediately push updates to the server
+        const updateResult = await safeRequest(
+            client,
+            `/api/v1/project/${config.projectID}/settings/update`,
+            { ...engineConfig } // we flatten them in request
+        );
+        if (updateResult && updateResult.engineConfig) {
+            // Re-assign to keep in sync with server response if needed
+            engineConfig = updateResult.engineConfig;
+            console.log(chalk.green('✅ Engine settings updated successfully.'));
+        } else {
+            console.log(chalk.yellow('No update response or partial update.'));
+        }
+    }
+}
+
+// Helper to interactively edit syncConfiguration
+async function editSyncConfiguration(engineConfig: any) {
+    engineConfig.syncConfiguration = engineConfig.syncConfiguration || {};
+    let done = false;
+    while (!done) {
+        console.log(chalk.blue('\nSync Configuration Menu'));
+        const existingTopics = Object.keys(engineConfig.syncConfiguration);
+        const topicChoices = existingTopics.map(t => {
+            const val = engineConfig.syncConfiguration[t];
+            let valDesc = '';
+            if (val === false) valDesc = 'false';
+            else if (val === 'SHIP') valDesc = 'SHIP';
+            else if (Array.isArray(val)) valDesc = JSON.stringify(val);
+            else valDesc = `${val}`;
+            return { name: `${t}: ${valDesc}`, value: t };
+        });
+        topicChoices.push({ name: 'Add new topic', value: 'addNewTopic' });
+        topicChoices.push({ name: 'Back', value: 'back' });
+
+        const { selectedTopic } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'selectedTopic',
+                message: 'Select a topic to edit or add new:',
+                choices: topicChoices
+            }
+        ]);
+
+        if (selectedTopic === 'back') {
+            done = true;
+        } else if (selectedTopic === 'addNewTopic') {
+            const { newTopic } = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'newTopic',
+                    message: 'Enter the new topic name:'
+                }
+            ]);
+            engineConfig.syncConfiguration[newTopic.trim()] = 'SHIP';
+        } else {
+            // Toggle or set
+            const topicVal = engineConfig.syncConfiguration[selectedTopic];
+            const { action } = await inquirer.prompt([
+                {
+                    type: 'list',
+                    name: 'action',
+                    message: `Editing "${selectedTopic}" (current: ${JSON.stringify(topicVal)}). Choose an action:`,
+                    choices: [
+                        { name: 'Set to false (no sync)', value: 'false' },
+                        { name: 'Set to SHIP (global discovery)', value: 'SHIP' },
+                        { name: 'Set to array of custom endpoints', value: 'array' },
+                        { name: 'Remove topic from the config', value: 'remove' },
+                        { name: 'Cancel', value: 'cancel' }
+                    ]
+                }
+            ]);
+
+            if (action === 'remove') {
+                delete engineConfig.syncConfiguration[selectedTopic];
+            } else if (action === 'false') {
+                engineConfig.syncConfiguration[selectedTopic] = false;
+            } else if (action === 'SHIP') {
+                engineConfig.syncConfiguration[selectedTopic] = 'SHIP';
+            } else if (action === 'array') {
+                const { endpoints } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'endpoints',
+                        message:
+                            'Enter comma-separated endpoints (e.g. https://peer1,https://peer2):'
+                    }
+                ]);
+                const splitted = endpoints
+                    .split(',')
+                    .map((e: string) => e.trim())
+                    .filter((x: string) => !!x);
+                engineConfig.syncConfiguration[selectedTopic] = splitted;
+            }
+        }
+    }
+}
+
+// Trigger the admin-protected endpoints via /admin/syncAdvertisements or /admin/startGASPSync
+async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertisements' | 'startGASPSync') {
+    if (!config.projectID) {
+        console.error(chalk.red('❌ No project ID set.'));
+        return;
+    }
+    const client = await getAuthriteClientForConfig(config);
+    const route = endpoint === 'syncAdvertisements'
+        ? `/api/v1/project/${config.projectID}/admin/syncAdvertisements`
+        : `/api/v1/project/${config.projectID}/admin/startGASPSync`;
+    const spinner = ora(`Triggering admin endpoint: ${endpoint}...`).start();
+    try {
+        const resp = await client.createSignedRequest(route, {});
+        spinner.succeed(`✅ ${endpoint} responded: ${JSON.stringify(resp)}`);
+    } catch (error: any) {
+        spinner.fail(`❌ ${endpoint} failed.`);
+        handleRequestError(error);
+    }
+}
+
 /**
  * Menus
  */
@@ -1359,6 +1546,9 @@ async function projectMenu() {
         { name: 'Billing: View Stats', value: 'billing-stats' },
         { name: 'Billing: Top Up Balance', value: 'topup' },
         { name: 'Delete Project', value: 'delete' },
+        { name: 'Edit Advanced Engine Config', value: 'edit-engine-config' },
+        { name: 'Trigger admin syncAdvertisements', value: 'admin-sync-ads' },
+        { name: 'Trigger admin startGASPSync', value: 'admin-start-gasp' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -1483,6 +1673,15 @@ async function projectMenu() {
         } else if (action === 'delete') {
             const config = await pickCARSConfig(info);
             await deleteProject(config);
+        } else if (action === 'edit-engine-config') {
+            const config = await pickCARSConfig(info);
+            await editAdvancedEngineConfig(config);
+        } else if (action === 'admin-sync-ads') {
+            const config = await pickCARSConfig(info);
+            await triggerAdminEndpoint(config, 'syncAdvertisements');
+        } else if (action === 'admin-start-gasp') {
+            const config = await pickCARSConfig(info);
+            await triggerAdminEndpoint(config, 'startGASPSync');
         } else {
             done = true;
         }

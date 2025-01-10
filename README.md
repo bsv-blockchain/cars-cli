@@ -11,6 +11,7 @@ CARS enables you to:
 - **Manage projects, admins, and releases** either interactively or through direct CLI commands for scriptable, non-interactive workflows.
 - **View detailed logs:** Project-level logs, release (deployment) logs, and resource-level logs from the running environment.
 - **Set custom domains, manage billing, and configure Web UI parameters** directly from the CLI.
+- **Configure advanced engine options** (e.g., sync configuration, request logging, GASP on/off, etc.) **and trigger admin-protected endpoints** (e.g. `syncAdvertisements`, `startGASPSync`) on your deployed OverlayExpress instance through your CARS Cloud.
 
 ## Key Features
 
@@ -20,6 +21,7 @@ CARS enables you to:
 - **Seamless Deployments**: Quickly create new releases, get secure upload URLs, and deploy artifacts to the CARS Cloud.
 - **Advanced Project Management**: Add/remove project admins, top up balance, set custom domains, and adjust Web UI configurations.
 - **Rich Logging**: View logs at multiple levels (project, release, resource), with filtering options for easy debugging.
+- **Fine-Grained Engine Control**: Edit advanced engine configurations (sync settings, log toggles, broadcast options) and **invoke admin endpoints** for your deployed OverlayExpress services.
 
 ## Installation
 
@@ -183,7 +185,29 @@ cars project delete
   ```
   If `<releaseId>` not provided, you’ll be prompted or can select interactively.
 
-### 9. Global Public Info
+### 9. Advanced Engine Configuration and Admin Endpoints
+
+You can edit advanced engine parameters (e.g., GASP on/off, sync configuration, request logging, log prefix, broadcast-failure handling) via the CLI:
+
+```bash
+cars
+```
+Under "Manage Projects" > "Edit Advanced Engine Config", you can **toggle** these options or **edit** your sync configuration.
+
+You can also **trigger admin-protected endpoints** on your deployed OverlayExpress service:
+
+- **syncAdvertisements**:
+  ```bash
+  cars
+  ```
+  Then select "Trigger admin syncAdvertisements" under the Project Management menu.
+
+- **startGASPSync**:
+  Similarly, choose "Trigger admin startGASPSync" from the Project Management menu.
+
+These endpoints securely proxy your request through the CARS Node using your project’s admin bearer token.
+
+### 10. Global Public Info
 
 View global public info about the selected CARS Cloud (public keys, pricing):
 
