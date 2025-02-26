@@ -7,7 +7,7 @@ import * as tar from 'tar';
 import { spawnSync } from 'child_process';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { AuthriteClient } from 'authrite-js';
+import { AuthFetch, WalletClient } from '@bsv/sdk';
 import ora from 'ora';
 import Table from 'cli-table3';
 
@@ -212,9 +212,16 @@ async function ensureRegistered(carsConfig: CARSConfig) {
         console.error(chalk.red('❌ No CARS Cloud URL set in the chosen configuration.'));
         process.exit(1);
     }
-    const client = new AuthriteClient(carsConfig.CARSCloudURL);
+    const client = new AuthFetch(new WalletClient('auto', 'localhost'));
     try {
-        await client.createSignedRequest('/api/v1/register', {});
+        const response = await client.fetch(`${carsConfig.CARSCloudURL}/api/v1/register`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: '{}'
+        });
+        await response.json()
     } catch (error: any) {
         handleRequestError(error, 'Registration failed');
         process.exit(1);
@@ -226,7 +233,7 @@ async function ensureRegistered(carsConfig: CARSConfig) {
  */
 
 async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: string): Promise<string> {
-    const client = new AuthriteClient(cloudUrl);
+    const client = new AuthFetch(new WalletClient('auto', 'localhost'));
     await ensureRegistered({ provider: 'CARS', CARSCloudURL: cloudUrl, name: 'CARS' });
 
     const { action } = await inquirer.prompt([
@@ -255,7 +262,14 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
 
         let projects: { projects: ProjectListing[] };
         try {
-            projects = await client.createSignedRequest('/api/v1/project/list', {});
+            let response = await client.fetch(`${cloudUrl}/api/v1/project/list`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: '{}'
+            });
+            projects = await response.json();
         } catch (error: any) {
             handleRequestError(error, 'Failed to retrieve projects from CARS Cloud.');
             process.exit(1);
@@ -275,7 +289,14 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
         // Create new project
         let result: any;
         try {
-            result = await client.createSignedRequest('/api/v1/project/create', {});
+            result = await client.fetch(`${cloudUrl}/api/v1/project/create`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: '{}'
+            });
+            result = await result.json()
         } catch (error: any) {
             handleRequestError(error, 'Failed to create new project.');
             process.exit(1);
@@ -656,9 +677,16 @@ function findLatestArtifact(): string {
  * Helper for requests
  */
 
-async function safeRequest<T = any>(client: AuthriteClient, endpoint: string, data: any): Promise<T | undefined> {
+async function safeRequest<T = any>(client: AuthFetch, baseUrl: string, endpoint: string, data: any): Promise<T | undefined> {
     try {
-        return await client.createSignedRequest<T>(endpoint, data);
+        const response = await client.fetch(`${baseUrl}${endpoint}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(data)
+        });
+        return await response.json()
     } catch (error: any) {
         handleRequestError(error, `Request to ${endpoint} failed`);
         return undefined;
@@ -783,13 +811,13 @@ async function chooseCARSCloudURL(info: CARSConfigInfo, specifiedNameOrIndex?: s
     return chosenURL;
 }
 
-async function getAuthriteClientForConfig(config: CARSConfig) {
+async function buildAuthFetch(config: CARSConfig) {
     if (!config.CARSCloudURL) {
         console.error(chalk.red('❌ CARSCloudURL not set on this configuration.'));
         process.exit(1);
     }
     await ensureRegistered(config);
-    return new AuthriteClient(config.CARSCloudURL);
+    return new AuthFetch(new WalletClient('auto', 'localhost'));
 }
 
 /**
@@ -799,8 +827,8 @@ async function pickReleaseId(config: CARSConfig, providedReleaseId?: string): Pr
     if (providedReleaseId) {
         return providedReleaseId;
     }
-    const client = await getAuthriteClientForConfig(config);
-    const result = await safeRequest<{ deploys: DeployInfo[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
+    const client = await buildAuthFetch(config);
+    const result = await safeRequest<{ deploys: DeployInfo[] }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/deploys/list`, {});
     if (!result || !Array.isArray(result.deploys) || result.deploys.length === 0) {
         console.log(chalk.yellow('No releases found. Cannot select a release ID.'));
         return undefined;
@@ -888,9 +916,10 @@ async function fetchResourceLogs(config: CARSConfig, params?: { resource?: strin
     }
     const tailVal = Math.min(Math.max(1, Math.floor(finalParams.tail || 1000)), MAX_TAIL_LINES);
 
-    const client = await getAuthriteClientForConfig(config);
+    const client = await buildAuthFetch(config);
     const result = await safeRequest<{ logs: string; metadata: any }>(
         client,
+        config.CARSCloudURL,
         `/api/v1/project/${config.projectID}/logs/resource/${finalParams.resource}`,
         { since: finalParams.since, tail: tailVal, level: finalParams.level }
     );
@@ -920,7 +949,7 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
         return;
     }
 
-    const client = await getAuthriteClientForConfig(config);
+    const client = await buildAuthFetch(config);
 
     if (interactive) {
         printDomainInstrictions(config.projectID, domain, domainType)
@@ -943,7 +972,14 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
     let retry = true;
     while (retry) {
         try {
-            const result: any = await client.createSignedRequest(`/api/v1/project/${config.projectID}/domains/${domainType}`, { domain });
+            let result: any = await client.fetch(`${config.CARSCloudURL}/api/v1/project/${config.projectID}/domains/${domainType}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ domain })
+            });
+            result = await result.json()
             if (result && result.domain) {
                 console.log(chalk.green(`✅ ${domainType.charAt(0).toUpperCase() + domainType.slice(1)} custom domain set successfully.`));
                 return;
@@ -984,10 +1020,16 @@ async function viewAndEditWebUIConfig(config: CARSConfig) {
         return;
     }
 
-    const client = await getAuthriteClientForConfig(config);
+    const client = await buildAuthFetch(config);
 
     // Fetch current info
-    const info = await safeRequest<ProjectInfo>(client, `/api/v1/project/${config.projectID}/info`, {});
+    const info = await safeRequest<ProjectInfo>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/info`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: '{}'
+    });
     if (!info) return;
 
     let webUIConfig = info.webUIConfig || {};
@@ -1045,7 +1087,7 @@ async function viewAndEditWebUIConfig(config: CARSConfig) {
 
         if (action !== 'done') {
             // Update on server
-            const resp = await safeRequest(client, `/api/v1/project/${config.projectID}/webui/config`, { config: webUIConfig });
+            const resp = await safeRequest(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/webui/config`, { config: webUIConfig });
             if (resp) {
                 console.log(chalk.green('✅ Web UI config updated.'));
             }
@@ -1057,7 +1099,7 @@ async function viewAndEditWebUIConfig(config: CARSConfig) {
  * Billing Stats
  */
 async function viewBillingStats(config: CARSConfig) {
-    const client = await getAuthriteClientForConfig(config);
+    const client = await buildAuthFetch(config);
 
     // Let user pick filters
     const { start } = await inquirer.prompt([
@@ -1075,7 +1117,7 @@ async function viewBillingStats(config: CARSConfig) {
     if (end.trim()) data.end = new Date(end.trim()).toISOString();
     if (type !== 'all') data.type = type;
 
-    const records = await safeRequest<{ records: AccountingRecord[] }>(client, `/api/v1/project/${config.projectID}/billing/stats`, data);
+    const records = await safeRequest<{ records: AccountingRecord[] }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/billing/stats`, data);
     if (!records) return;
 
     if (records.records.length === 0) {
@@ -1098,8 +1140,8 @@ async function showProjectInfo(config: CARSConfig) {
         console.error(chalk.red('❌ No project ID set.'));
         return;
     }
-    const client = await getAuthriteClientForConfig(config);
-    const info = await safeRequest<ProjectInfo>(client, `/api/v1/project/${config.projectID}/info`, {});
+    const client = await buildAuthFetch(config);
+    const info = await safeRequest<ProjectInfo>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/info`, {});
     if (!info) return;
 
     console.log(chalk.magentaBright(`\nProject "${info.name}" (ID: ${info.id}) Info:`));
@@ -1150,9 +1192,8 @@ async function topUpProjectBalance(config: CARSConfig) {
         { type: 'number', name: 'amount', message: 'Enter amount in satoshis to add:', validate: (val: number) => val > 0 ? true : 'Amount must be positive.' }
     ]);
 
-    const client = await getAuthriteClientForConfig(config);
-    // TODO: ACTUALLY PAY
-    const result = await safeRequest(client, `/api/v1/project/${config.projectID}/pay`, { amount });
+    const client = await buildAuthFetch(config);
+    const result = await safeRequest(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/pay`, { amount });
     if (result) {
         console.log(chalk.green(`✅ Balance topped up by ${amount} sats.`));
     }
@@ -1176,8 +1217,8 @@ async function deleteProject(config: CARSConfig) {
     ]);
     if (!confirmAgain) return;
 
-    const client = await getAuthriteClientForConfig(config);
-    const result = await safeRequest(client, `/api/v1/project/${config.projectID}/delete`, {});
+    const client = await buildAuthFetch(config);
+    const result = await safeRequest(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/delete`, {});
     if (result) {
         console.log(chalk.green('✅ Project deleted.'));
     }
@@ -1216,10 +1257,10 @@ async function editAdvancedEngineConfig(config: CARSConfig) {
         console.error(chalk.red('❌ No project ID set.'));
         return;
     }
-    const client = await getAuthriteClientForConfig(config);
+    const client = await buildAuthFetch(config);
 
     // We fetch the current engine config from the project info
-    const infoResp = await safeRequest<any>(client, `/api/v1/project/${config.projectID}/info`, {});
+    const infoResp = await safeRequest<any>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/info`, {});
     if (!infoResp) return;
     let engineConfig: any = {};
     if (infoResp.engine_config) {
@@ -1282,6 +1323,7 @@ async function editAdvancedEngineConfig(config: CARSConfig) {
         // Immediately push updates to the server
         const updateResult = await safeRequest(
             client,
+            config.CARSCloudURL,
             `/api/v1/project/${config.projectID}/settings/update`,
             { ...engineConfig } // we flatten them in request
         );
@@ -1383,13 +1425,20 @@ async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertise
         console.error(chalk.red('❌ No project ID set.'));
         return;
     }
-    const client = await getAuthriteClientForConfig(config);
+    const client = await buildAuthFetch(config);
     const route = endpoint === 'syncAdvertisements'
         ? `/api/v1/project/${config.projectID}/admin/syncAdvertisements`
         : `/api/v1/project/${config.projectID}/admin/startGASPSync`;
     const spinner = ora(`Triggering admin endpoint: ${endpoint}...`).start();
     try {
-        const resp = await client.createSignedRequest(route, {});
+        let resp = await client.fetch(`${config.CARSCloudURL}${route}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: '{}'
+        });
+        resp = await resp.json()
         spinner.succeed(`✅ ${endpoint} responded: ${JSON.stringify(resp)}`);
     } catch (error: any) {
         spinner.fail(`❌ ${endpoint} failed.`);
@@ -1565,11 +1614,18 @@ async function projectMenu() {
 
         if (action === 'ls') {
             const chosenURL = await chooseCARSCloudURL(info);
-            const client = new AuthriteClient(chosenURL);
+            const client = new AuthFetch(new WalletClient('auto', 'localhost'));
             await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
             let result: { projects: ProjectListing[] };
             try {
-                result = await client.createSignedRequest('/api/v1/project/list', {});
+                const res = await client.fetch(`${chosenURL}/api/v1/project/list`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: '{}'
+                });
+                result = await res.json()
                 printProjectList(result.projects);
             } catch (e: any) {
                 handleRequestError(e, 'Failed to list projects');
@@ -1580,15 +1636,12 @@ async function projectMenu() {
         } else if (action === 'add-admin') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
-
-            // Fetch admins first
-            const client = await getAuthriteClientForConfig(config);
-            const userResp = await client.createSignedRequest('/api/v1/project/list', {});
+            const client = await buildAuthFetch(config);
             console.log(chalk.yellow('Please enter Identity Key or Email of the user to add as admin:'));
             const { identityKeyOrEmail } = await inquirer.prompt([
                 { type: 'input', name: 'identityKeyOrEmail', message: 'IdentityKey or Email:' }
             ]);
-            const result = await safeRequest(client, `/api/v1/project/${config.projectID}/addAdmin`, { identityKeyOrEmail });
+            const result = await safeRequest(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/addAdmin`, { identityKeyOrEmail });
             if (result.message) {
                 console.log(chalk.green(`✅ ${result.message}`));
             } else {
@@ -1597,8 +1650,8 @@ async function projectMenu() {
         } else if (action === 'remove-admin') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ admins: AdminInfo[] }>(client, `/api/v1/project/${config.projectID}/admins/list`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ admins: AdminInfo[] }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/admins/list`, {});
             if (result) {
                 if (result.admins.length === 0) {
                     console.log(chalk.yellow('No admins found.'));
@@ -1615,7 +1668,7 @@ async function projectMenu() {
                         }))
                     }
                 ]);
-                const rmResult = await safeRequest(client, `/api/v1/project/${config.projectID}/removeAdmin`, { identityKeyOrEmail: chosenAdmin });
+                const rmResult = await safeRequest(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/removeAdmin`, { identityKeyOrEmail: chosenAdmin });
                 if (rmResult.message) {
                     console.log(chalk.green(`✅ ${rmResult.message}`));
                 } else {
@@ -1625,16 +1678,16 @@ async function projectMenu() {
         } else if (action === 'list-admins') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ admins: AdminInfo[] }>(client, `/api/v1/project/${config.projectID}/admins/list`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ admins: AdminInfo[] }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/admins/list`, {});
             if (result && result.admins) {
                 printAdminsList(result.admins);
             }
         } else if (action === 'logs-project') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/project`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ logs: string }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/logs/project`, {});
             if (result && typeof result.logs === 'string') {
                 printLogs(result.logs, 'Project Logs');
             }
@@ -1644,8 +1697,8 @@ async function projectMenu() {
         } else if (action === 'releases') {
             const config = await pickCARSConfig(info);
             if (!config.projectID) { console.error(chalk.red('❌ No project ID.')); continue; }
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ deploys: DeployInfo[] }>(client, `/api/v1/project/${config.projectID}/deploys/list`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ deploys: DeployInfo[] }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/deploys/list`, {});
             if (result && Array.isArray(result.deploys)) {
                 printReleasesList(result.deploys);
             }
@@ -1716,8 +1769,8 @@ async function releaseMenu() {
                 console.error(chalk.red('❌ No project ID set in this configuration.'));
                 continue;
             }
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ url: string, deploymentId: string }>(client, `/api/v1/project/${config.projectID}/deploy`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ url: string, deploymentId: string }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/deploy`, {});
             if (result && result.url && result.deploymentId) {
                 console.log(chalk.green(`✅ Release created. Release ID: ${result.deploymentId}`));
                 console.log(`Upload URL: ${result.url}`);
@@ -1740,8 +1793,8 @@ async function releaseMenu() {
             if (!releaseId) {
                 continue;
             }
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/deployment/${releaseId}`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ logs: string }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/logs/deployment/${releaseId}`, {});
             if (result && typeof result.logs === 'string') {
                 printLogs(result.logs, 'Release Logs');
             }
@@ -1755,8 +1808,8 @@ async function releaseMenu() {
             const { deploymentId } = await inquirer.prompt([
                 { type: 'input', name: 'deploymentId', message: 'Enter Deployment (Release) ID:' }
             ]);
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${config.projectID}/logs/deployment/${deploymentId}`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ logs: string }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/logs/deployment/${deploymentId}`, {});
             if (result && typeof result.logs === 'string') {
                 printLogs(result.logs, 'Release Logs');
             }
@@ -1768,8 +1821,8 @@ async function releaseMenu() {
             }
 
             const artifactPath = findLatestArtifact();
-            const client = await getAuthriteClientForConfig(config);
-            const result = await safeRequest<{ url: string, deploymentId: string }>(client, `/api/v1/project/${config.projectID}/deploy`, {});
+            const client = await buildAuthFetch(config);
+            const result = await safeRequest<{ url: string, deploymentId: string }>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/deploy`, {});
             if (result && result.url && result.deploymentId) {
                 await uploadArtifact(result.url, artifactPath);
             }
@@ -1933,11 +1986,18 @@ projectCommand
     .action(async (nameOrIndex) => {
         const info = loadCARSConfigInfo();
         const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
-        const client = new AuthriteClient(chosenURL);
+        const client = new AuthFetch(new WalletClient('auto', 'localhost'));
         await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
         try {
-            const result = await client.createSignedRequest('/api/v1/project/list', {});
-            printProjectList(result.projects);
+            const result = await client.fetch(`${chosenURL}/api/v1/project/list`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: '{}'
+            });
+            const resultJson = await result.json()
+            printProjectList(resultJson.projects);
         } catch (e: any) {
             handleRequestError(e, 'Failed to list projects');
         }
@@ -1964,8 +2024,8 @@ projectCommand
             console.error(chalk.red('❌ No project ID set in this configuration.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/addAdmin`, { identityKeyOrEmail });
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/addAdmin`, { identityKeyOrEmail });
         if (result.message) {
             console.log(chalk.green(`✅ ${result.message}`));
         } else {
@@ -1984,8 +2044,8 @@ projectCommand
             console.error(chalk.red('❌ No project ID set in this configuration.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const rmResult = await safeRequest(client, `/api/v1/project/${cfg.projectID}/removeAdmin`, { identityKeyOrEmail });
+        const client = await buildAuthFetch(cfg);
+        const rmResult = await safeRequest(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/removeAdmin`, { identityKeyOrEmail });
         if (rmResult.message) {
             console.log(chalk.green(`✅ ${rmResult.message}`));
         } else {
@@ -2004,8 +2064,8 @@ projectCommand
             console.error(chalk.red('❌ No project ID set in this configuration.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ admins: AdminInfo[] }>(client, `/api/v1/project/${cfg.projectID}/admins/list`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest<{ admins: AdminInfo[] }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/admins/list`, {});
         if (result && result.admins) printAdminsList(result.admins);
     });
 
@@ -2020,8 +2080,8 @@ projectCommand
             console.error(chalk.red('❌ No project ID set in this configuration.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${cfg.projectID}/logs/project`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest<{ logs: string }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/logs/project`, {});
         if (result) printLogs(result.logs, 'Project Logs');
     });
 
@@ -2055,8 +2115,8 @@ projectCommand
             console.error(chalk.red('❌ No project ID set in this configuration.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ deploys: DeployInfo[] }>(client, `/api/v1/project/${cfg.projectID}/deploys/list`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest<{ deploys: DeployInfo[] }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/deploys/list`, {});
         if (result && Array.isArray(result.deploys)) {
             printReleasesList(result.deploys);
         }
@@ -2093,8 +2153,8 @@ projectCommand
             console.error(chalk.red('❌ No project ID.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const projectInfo = await safeRequest<ProjectInfo>(client, `/api/v1/project/${cfg.projectID}/info`, {});
+        const client = await buildAuthFetch(cfg);
+        const projectInfo = await safeRequest<ProjectInfo>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/info`, {});
         if (projectInfo && projectInfo.webUIConfig) {
             const wtable = new Table({ head: ['Key', 'Value'] });
             Object.keys(projectInfo.webUIConfig).forEach(k => wtable.push([k, JSON.stringify(projectInfo.webUIConfig[k])]));
@@ -2123,13 +2183,13 @@ projectCommand
             // Not JSON, treat as string
         }
 
-        const client = await getAuthriteClientForConfig(cfg);
-        const projectInfo = await safeRequest<ProjectInfo>(client, `/api/v1/project/${cfg.projectID}/info`, {});
+        const client = await buildAuthFetch(cfg);
+        const projectInfo = await safeRequest<ProjectInfo>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/info`, {});
         if (!projectInfo) return;
         const webUIConfig = projectInfo.webUIConfig || {};
         webUIConfig[key] = parsedVal;
 
-        const resp = await safeRequest(client, `/api/v1/project/${cfg.projectID}/webui/config`, { config: webUIConfig });
+        const resp = await safeRequest(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/webui/config`, { config: webUIConfig });
         if (resp) {
             console.log(chalk.green('✅ Web UI config updated.'));
         }
@@ -2147,8 +2207,8 @@ projectCommand
             process.exit(1);
         }
 
-        const client = await getAuthriteClientForConfig(cfg);
-        const projectInfo = await safeRequest<ProjectInfo>(client, `/api/v1/project/${cfg.projectID}/info`, {});
+        const client = await buildAuthFetch(cfg);
+        const projectInfo = await safeRequest<ProjectInfo>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/info`, {});
         if (!projectInfo) return;
         const webUIConfig = projectInfo.webUIConfig || {};
         if (!(key in webUIConfig)) {
@@ -2157,7 +2217,7 @@ projectCommand
         }
         delete webUIConfig[key];
 
-        const resp = await safeRequest(client, `/api/v1/project/${cfg.projectID}/webui/config`, { config: webUIConfig });
+        const resp = await safeRequest(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/webui/config`, { config: webUIConfig });
         if (resp) {
             console.log(chalk.green('✅ Web UI config updated.'));
         }
@@ -2184,8 +2244,8 @@ projectCommand
         if (options.end) data.end = new Date(options.end.trim()).toISOString();
         if (options.type && options.type !== 'all') data.type = options.type;
 
-        const client = await getAuthriteClientForConfig(cfg);
-        const records = await safeRequest<{ records: AccountingRecord[] }>(client, `/api/v1/project/${cfg.projectID}/billing/stats`, data);
+        const client = await buildAuthFetch(cfg);
+        const records = await safeRequest<{ records: AccountingRecord[] }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/billing/stats`, data);
         if (!records) return;
 
         if (records.records.length === 0) {
@@ -2222,10 +2282,10 @@ projectCommand
             amount = answers.amount;
         }
 
-        const client = await getAuthriteClientForConfig(cfg);
+        const client = await buildAuthFetch(cfg);
 
         // TODO: ACTUALLY IMPLEMENT PAYMENT
-        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/pay`, { amount });
+        const result = await safeRequest(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/pay`, { amount });
         if (result) {
             console.log(chalk.green(`✅ Balance topped up by ${amount} sats.`));
         }
@@ -2257,8 +2317,8 @@ projectCommand
             if (!confirmAgain) return;
         }
 
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest(client, `/api/v1/project/${cfg.projectID}/delete`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/delete`, {});
         if (result) {
             console.log(chalk.green('✅ Project deleted.'));
         }
@@ -2285,8 +2345,8 @@ releaseCommand
             console.error(chalk.red('❌ No project ID set.'));
             process.exit(1);
         }
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ url: string, deploymentId: string }>(client, `/api/v1/project/${cfg.projectID}/deploy`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest<{ url: string, deploymentId: string }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/deploy`, {});
         if (result && result.url && result.deploymentId) {
             console.log(chalk.green(`✅ Release created. Release ID: ${result.deploymentId}`));
             console.log(`Upload URL: ${result.url}`);
@@ -2316,8 +2376,8 @@ releaseCommand
         const finalReleaseId = await pickReleaseId(cfg, releaseId);
         if (!finalReleaseId) return;
 
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ logs: string }>(client, `/api/v1/project/${cfg.projectID}/logs/deployment/${finalReleaseId}`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest<{ logs: string }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/logs/deployment/${finalReleaseId}`, {});
         if (result) printLogs(result.logs, 'Release Logs');
     });
 
@@ -2335,8 +2395,8 @@ releaseCommand
         }
 
         const artifactPath = findLatestArtifact();
-        const client = await getAuthriteClientForConfig(cfg);
-        const result = await safeRequest<{ url: string, deploymentId: string }>(client, `/api/v1/project/${cfg.projectID}/deploy`, {});
+        const client = await buildAuthFetch(cfg);
+        const result = await safeRequest<{ url: string, deploymentId: string }>(client, cfg.CARSCloudURL, `/api/v1/project/${cfg.projectID}/deploy`, {});
         if (result && result.url && result.deploymentId) {
             await uploadArtifact(result.url, artifactPath);
         }
