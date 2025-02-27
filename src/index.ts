@@ -11,6 +11,10 @@ import { AuthFetch, WalletClient } from '@bsv/sdk';
 import ora from 'ora';
 import Table from 'cli-table3';
 
+// Set up an RNG
+import * as crypto from 'crypto'
+global.self = { crypto } as any
+
 /**
  * Types
  */
@@ -217,7 +221,7 @@ async function ensureRegistered(carsConfig: CARSConfig) {
         const response = await client.fetch(`${carsConfig.CARSCloudURL}/api/v1/register`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'content-type': 'application/json'
             },
             body: '{}'
         });
@@ -265,7 +269,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             let response = await client.fetch(`${cloudUrl}/api/v1/project/list`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'content-type': 'application/json'
                 },
                 body: '{}'
             });
@@ -292,7 +296,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             result = await client.fetch(`${cloudUrl}/api/v1/project/create`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'content-type': 'application/json'
                 },
                 body: '{}'
             });
@@ -682,7 +686,7 @@ async function safeRequest<T = any>(client: AuthFetch, baseUrl: string, endpoint
         const response = await client.fetch(`${baseUrl}${endpoint}`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'content-type': 'application/json'
             },
             body: JSON.stringify(data)
         });
@@ -975,7 +979,7 @@ async function setCustomDomain(config: CARSConfig, domainType: 'frontend' | 'bac
             let result: any = await client.fetch(`${config.CARSCloudURL}/api/v1/project/${config.projectID}/domains/${domainType}`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'content-type': 'application/json'
                 },
                 body: JSON.stringify({ domain })
             });
@@ -1026,7 +1030,7 @@ async function viewAndEditWebUIConfig(config: CARSConfig) {
     const info = await safeRequest<ProjectInfo>(client, config.CARSCloudURL, `/api/v1/project/${config.projectID}/info`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
+            'content-type': 'application/json'
         },
         body: '{}'
     });
@@ -1434,7 +1438,7 @@ async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertise
         let resp = await client.fetch(`${config.CARSCloudURL}${route}`, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'content-type': 'application/json'
             },
             body: '{}'
         });
@@ -1621,7 +1625,7 @@ async function projectMenu() {
                 const res = await client.fetch(`${chosenURL}/api/v1/project/list`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'content-type': 'application/json'
                     },
                     body: '{}'
                 });
@@ -1891,7 +1895,7 @@ async function uploadArtifact(uploadURL: string, artifactPath: string) {
     try {
         await axios.post(uploadURL, artifactData, {
             headers: {
-                'Content-Type': 'application/octet-stream'
+                'content-type': 'application/octet-stream'
             },
         });
         spinner.succeed('✅ Artifact uploaded successfully.');
@@ -1992,7 +1996,7 @@ projectCommand
             const result = await client.fetch(`${chosenURL}/api/v1/project/list`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'content-type': 'application/json'
                 },
                 body: '{}'
             });
