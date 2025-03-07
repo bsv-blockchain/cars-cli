@@ -67,6 +67,7 @@ interface ProjectListing {
     name: string;
     balance: string;
     created_at: string;
+    network: 'mainnet' | 'testnet';
 }
 
 interface AdminInfo {
@@ -236,7 +237,7 @@ async function ensureRegistered(carsConfig: CARSConfig) {
  * Project and Config Setup Helpers
  */
 
-async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: string): Promise<string> {
+async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: string, network = 'mainnet'): Promise<string> {
     const client = new AuthFetch(new WalletClient('auto', 'localhost'));
     await ensureRegistered({ provider: 'CARS', CARSCloudURL: cloudUrl, name: 'CARS' });
 
@@ -284,12 +285,22 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
             process.exit(1);
         }
 
-        if (!projects.projects.some(x => x.id === projectID.trim())) {
-            console.error(chalk.red(`❌ Project ID "${projectID}" not found on server ${cloudUrl}.`));
+        if (!projects.projects.some(x => x.network === network && x.id === projectID.trim())) {
+            console.error(chalk.red(`❌ Project ID "${projectID}" not found on ${network} at server ${cloudUrl}.`));
             process.exit(1);
         }
         return projectID.trim();
     } else {
+        const { name } = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'name',
+                message: 'What should this CARS server name this project:',
+                default: 'Unnamed Project',
+                validate: (val: string) => val.trim() ? true : 'Project name is required.'
+            }
+        ]);
+
         // Create new project
         let result: any;
         try {
@@ -298,7 +309,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
                 headers: {
                     'content-type': 'application/json'
                 },
-                body: '{}'
+                body: JSON.stringify({ name, network })
             });
             result = await result.json()
         } catch (error: any) {
@@ -378,7 +389,7 @@ async function addCARSConfigInteractive(info: CARSConfigInfo): Promise<CARSConfi
     }
 
     const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
-    const projectID = await chooseOrCreateProjectID(finalCloudUrl);
+    const projectID = await chooseOrCreateProjectID(finalCloudUrl, undefined, network);
 
     const newCfg: CARSConfig = {
         name,
@@ -466,7 +477,7 @@ async function editCARSConfigInteractive(info: CARSConfigInfo, config: CARSConfi
     }
 
     const finalCloudUrl = cloudUrlChoice === 'custom' ? customCloudUrl : cloudUrlChoice;
-    const projectID = await chooseOrCreateProjectID(finalCloudUrl, config.projectID);
+    const projectID = await chooseOrCreateProjectID(finalCloudUrl, config.projectID, config.network);
 
     config.name = name.trim();
     config.CARSCloudURL = finalCloudUrl;
