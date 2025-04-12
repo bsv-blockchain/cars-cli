@@ -7,13 +7,39 @@ import * as tar from 'tar';
 import { spawnSync } from 'child_process';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { AuthFetch, WalletClient } from '@bsv/sdk';
+import { AuthFetch, HexString, KeyDeriver, PrivateKey, WalletClient, WalletInterface, WalletNetwork } from '@bsv/sdk';
 import ora from 'ora';
 import Table from 'cli-table3';
 
 // Set up an RNG
 import * as crypto from 'crypto'
+import { PrivilegedKeyManager, Services, StorageClient, Wallet, WalletSigner, WalletStorageManager } from '@bsv/wallet-toolbox-client';
 global.self = { crypto } as any
+
+// Create a Wallet Client and AuthFetch
+let walletClient: WalletInterface = new WalletClient('auto', 'localhost')
+let authFetch = new AuthFetch(walletClient);
+
+const remakeWallet = async (key: HexString, network: WalletNetwork = 'mainnet', storage?: string) => {
+    if (typeof storage !== 'string') {
+        if (network === 'mainnet') {
+            storage = 'https://storage.babbage.systems'
+        } else {
+            storage = 'https://staging-storage.babbage.systems'
+        }
+    }
+    const keyDeriver = new KeyDeriver(new PrivateKey(key, 'hex'));
+    const storageManager = new WalletStorageManager(keyDeriver.identityKey);
+    const chain = network === 'mainnet' ? 'main' : 'test'
+    const signer = new WalletSigner(chain, keyDeriver, storageManager);
+    const services = new Services(chain);
+    const wallet = new Wallet(signer, services);
+    const client = new StorageClient(wallet, storage);
+    await client.makeAvailable();
+    await storageManager.addWalletStorageProvider(client);
+    walletClient = wallet;
+    authFetch = new AuthFetch(walletClient);
+}
 
 /**
  * Types
@@ -212,14 +238,18 @@ async function pickCARSConfig(info: CARSConfigInfo, nameOrIndex?: string): Promi
     return all[chosenIndex];
 }
 
+// Cache registrations to avoid re-fetching
+const registrations = {}
 async function ensureRegistered(carsConfig: CARSConfig) {
     if (!carsConfig.CARSCloudURL) {
         console.error(chalk.red('❌ No CARS Cloud URL set in the chosen configuration.'));
         process.exit(1);
     }
-    const client = new AuthFetch(new WalletClient('auto', 'localhost'));
+    if (registrations[carsConfig.CARSCloudURL]) {
+        return
+    }
     try {
-        const response = await client.fetch(`${carsConfig.CARSCloudURL}/api/v1/register`, {
+        const response = await authFetch.fetch(`${carsConfig.CARSCloudURL}/api/v1/register`, {
             method: 'POST',
             headers: {
                 'content-type': 'application/json'
@@ -227,6 +257,7 @@ async function ensureRegistered(carsConfig: CARSConfig) {
             body: '{}'
         });
         await response.json()
+        registrations[carsConfig.CARSCloudURL] = true
     } catch (error: any) {
         handleRequestError(error, 'Registration failed');
         process.exit(1);
@@ -238,7 +269,6 @@ async function ensureRegistered(carsConfig: CARSConfig) {
  */
 
 async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: string, network = 'mainnet'): Promise<string> {
-    const client = new AuthFetch(new WalletClient('auto', 'localhost'));
     await ensureRegistered({ provider: 'CARS', CARSCloudURL: cloudUrl, name: 'CARS' });
 
     const { action } = await inquirer.prompt([
@@ -267,7 +297,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
 
         let projects: { projects: ProjectListing[] };
         try {
-            let response = await client.fetch(`${cloudUrl}/api/v1/project/list`, {
+            let response = await authFetch.fetch(`${cloudUrl}/api/v1/project/list`, {
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json'
@@ -304,7 +334,7 @@ async function chooseOrCreateProjectID(cloudUrl: string, currentProjectID?: stri
         // Create new project
         let result: any;
         try {
-            result = await client.fetch(`${cloudUrl}/api/v1/project/create`, {
+            result = await authFetch.fetch(`${cloudUrl}/api/v1/project/create`, {
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json'
@@ -832,7 +862,7 @@ async function buildAuthFetch(config: CARSConfig) {
         process.exit(1);
     }
     await ensureRegistered(config);
-    return new AuthFetch(new WalletClient('auto', 'localhost'));
+    return authFetch;
 }
 
 /**
@@ -1629,11 +1659,10 @@ async function projectMenu() {
 
         if (action === 'ls') {
             const chosenURL = await chooseCARSCloudURL(info);
-            const client = new AuthFetch(new WalletClient('auto', 'localhost'));
             await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
             let result: { projects: ProjectListing[] };
             try {
-                const res = await client.fetch(`${chosenURL}/api/v1/project/list`, {
+                const res = await authFetch.fetch(`${chosenURL}/api/v1/project/list`, {
                     method: 'POST',
                     headers: {
                         'content-type': 'application/json'
@@ -1928,7 +1957,10 @@ const configCommand = program
 configCommand
     .command('ls')
     .description('List all configurations (CARS and non-CARS)')
-    .action(() => {
+    .action(async (options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         printAllConfigsWithIndex(info);
     });
@@ -1936,7 +1968,10 @@ configCommand
 configCommand
     .command('add')
     .description('Add a new CARS configuration')
-    .action(async () => {
+    .action(async (options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         await addCARSConfigInteractive(info);
     });
@@ -1944,7 +1979,10 @@ configCommand
 configCommand
     .command('edit <nameOrIndex>')
     .description('Edit a CARS configuration')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = findConfigByNameOrIndex(info, nameOrIndex);
         if (!cfg) {
@@ -1961,7 +1999,10 @@ configCommand
 configCommand
     .command('delete <nameOrIndex>')
     .description('Delete a CARS configuration')
-    .action((nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = findConfigByNameOrIndex(info, nameOrIndex);
         if (!cfg) {
@@ -1975,7 +2016,10 @@ configCommand
         deleteCARSConfig(info, cfg);
     });
 
-configCommand.action(async () => {
+configCommand.action(async (options) => {
+    if (options.key) {
+        await remakeWallet(options.key, options.network, options.storage)
+    }
     await configMenu();
 });
 
@@ -1984,7 +2028,10 @@ configCommand.action(async () => {
 program
     .command('build [nameOrIndex]')
     .description('Build local artifact for release')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         await buildArtifact(nameOrIndex);
     });
 
@@ -1998,13 +2045,15 @@ const projectCommand = program
 projectCommand
     .command('ls [nameOrIndex]')
     .description('List all projects on a chosen CARS Cloud server')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
-        const client = new AuthFetch(new WalletClient('auto', 'localhost'));
         await ensureRegistered({ provider: 'CARS', CARSCloudURL: chosenURL, name: 'CARS' });
         try {
-            const result = await client.fetch(`${chosenURL}/api/v1/project/list`, {
+            const result = await authFetch.fetch(`${chosenURL}/api/v1/project/list`, {
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json'
@@ -2022,7 +2071,10 @@ projectCommand
 projectCommand
     .command('info [nameOrIndex]')
     .description('Show detailed info about the project in the chosen configuration')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         await showProjectInfo(cfg);
@@ -2032,7 +2084,10 @@ projectCommand
 projectCommand
     .command('add-admin <identityKeyOrEmail> [nameOrIndex]')
     .description('Add an admin to the project of the chosen configuration')
-    .action(async (identityKeyOrEmail, nameOrIndex) => {
+    .action(async (identityKeyOrEmail, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2052,7 +2107,10 @@ projectCommand
 projectCommand
     .command('remove-admin <identityKeyOrEmail> [nameOrIndex]')
     .description('Remove an admin from the project of the chosen configuration')
-    .action(async (identityKeyOrEmail, nameOrIndex) => {
+    .action(async (identityKeyOrEmail, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2072,7 +2130,10 @@ projectCommand
 projectCommand
     .command('list-admins [nameOrIndex]')
     .description('List the admins for the project of the chosen configuration')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2088,7 +2149,10 @@ projectCommand
 projectCommand
     .command('logs [nameOrIndex]')
     .description('View logs of the project from the chosen configuration')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2109,6 +2173,9 @@ projectCommand
     .option('--tail <lines>', 'Number of lines (1-10000)', '1000')
     .option('--level <level>', 'Log level: all|error|warn|info', 'all')
     .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         await fetchResourceLogs(cfg, {
@@ -2123,7 +2190,10 @@ projectCommand
 projectCommand
     .command('releases [nameOrIndex]')
     .description('List all releases for the project from the chosen configuration')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2141,7 +2211,10 @@ projectCommand
 projectCommand
     .command('domain:frontend <domain> [nameOrIndex]')
     .description('Set the frontend custom domain for the project of the chosen configuration (non-interactive)')
-    .action(async (domain, nameOrIndex) => {
+    .action(async (domain, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         await setCustomDomain(cfg, 'frontend', domain, false);
@@ -2151,7 +2224,10 @@ projectCommand
 projectCommand
     .command('domain:backend <domain> [nameOrIndex]')
     .description('Set the backend custom domain for the project of the chosen configuration (non-interactive)')
-    .action(async (domain, nameOrIndex) => {
+    .action(async (domain, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         await setCustomDomain(cfg, 'backend', domain, false);
@@ -2161,7 +2237,10 @@ projectCommand
 projectCommand
     .command('webui-config:view [nameOrIndex]')
     .description('View the current Web UI config of the project')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2183,7 +2262,10 @@ projectCommand
 projectCommand
     .command('webui-config:set <key> <value> [nameOrIndex]')
     .description('Set (add/update) a key in the Web UI config of the project')
-    .action(async (key, value, nameOrIndex) => {
+    .action(async (key, value, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2214,7 +2296,10 @@ projectCommand
 projectCommand
     .command('webui-config:delete <key> [nameOrIndex]')
     .description('Delete a key from the Web UI config of the project')
-    .action(async (key, nameOrIndex) => {
+    .action(async (key, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2246,6 +2331,9 @@ projectCommand
     .option('--end <date>', 'End date (YYYY-MM-DD)')
     .option('--type <type>', 'Type of records: all|debit|credit', 'all')
     .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
 
@@ -2281,6 +2369,9 @@ projectCommand
     .description('Top up the project balance. If --amount is not specified, you will be prompted.')
     .option('--amount <sats>', 'Amount in satoshis to add')
     .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
 
@@ -2312,6 +2403,9 @@ projectCommand
     .description('Delete the project. This cannot be undone. Use --force to confirm.')
     .option('--force', 'Skip confirmation prompts')
     .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
 
@@ -2339,7 +2433,10 @@ projectCommand
         }
     });
 
-projectCommand.action(async () => {
+projectCommand.action(async (options) => {
+    if (options.key) {
+        await remakeWallet(options.key, options.network, options.storage)
+    }
     await projectMenu();
 });
 
@@ -2353,7 +2450,10 @@ const releaseCommand = program
 releaseCommand
     .command('get-upload-url [nameOrIndex]')
     .description('Create a new release for a chosen CARS configuration and get the upload URL')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2372,7 +2472,10 @@ releaseCommand
 releaseCommand
     .command('upload-files <uploadURL> <artifactPath>')
     .description('Upload a built artifact to the given URL')
-    .action(async (uploadURL, artifactPath) => {
+    .action(async (uploadURL, artifactPath, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         await uploadArtifact(uploadURL, artifactPath);
     });
 
@@ -2380,7 +2483,10 @@ releaseCommand
 releaseCommand
     .command('logs [releaseId] [nameOrIndex]')
     .description('View logs of a release by its ID. If no releaseId is provided, select from a menu.')
-    .action(async (releaseId, nameOrIndex) => {
+    .action(async (releaseId, nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
         if (!cfg.projectID) {
@@ -2400,7 +2506,10 @@ releaseCommand
 releaseCommand
     .command('now [nameOrIndex]')
     .description('Create a new release and automatically upload the latest artifact')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const cfg = await pickCARSConfig(info, nameOrIndex);
 
@@ -2417,7 +2526,10 @@ releaseCommand
         }
     });
 
-releaseCommand.action(async () => {
+releaseCommand.action(async (options) => {
+    if (options.key) {
+        await remakeWallet(options.key, options.network, options.storage)
+    }
     await releaseMenu();
 });
 
@@ -2437,7 +2549,10 @@ artifactCommand
 artifactCommand
     .command('delete <artifactName>')
     .description('Delete a local artifact')
-    .action((artifactName) => {
+    .action(async (artifactName, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const artifacts = findArtifacts();
         if (!artifacts.includes(artifactName)) {
             console.error(chalk.red(`❌ Artifact "${artifactName}" not found.`));
@@ -2451,12 +2566,14 @@ artifactCommand.action(async () => {
     await artifactMenu();
 });
 
-
 // Global public info
 program
     .command('global-info [nameOrIndex]')
     .description('View global public info (public keys, pricing, etc.) from a chosen CARS Cloud')
-    .action(async (nameOrIndex) => {
+    .action(async (nameOrIndex, options) => {
+        if (options.key) {
+            await remakeWallet(options.key, options.network, options.storage)
+        }
         const info = loadCARSConfigInfo();
         const chosenURL = await chooseCARSCloudURL(info, nameOrIndex);
         const spinner = ora('Fetching global public info...').start();
@@ -2480,6 +2597,11 @@ program
         }
     });
 
+// Options for key, network, and storage
+program
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS');
 
 // If `cars` is invoked without args, enter the main menu
 (async function main() {
