@@ -1956,6 +1956,9 @@ const configCommand = program
 
 configCommand
     .command('ls')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('List all configurations (CARS and non-CARS)')
     .action(async (options) => {
         if (options.key) {
@@ -1967,6 +1970,9 @@ configCommand
 
 configCommand
     .command('add')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Add a new CARS configuration')
     .action(async (options) => {
         if (options.key) {
@@ -1978,6 +1984,9 @@ configCommand
 
 configCommand
     .command('edit <nameOrIndex>')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Edit a CARS configuration')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -1998,6 +2007,9 @@ configCommand
 
 configCommand
     .command('delete <nameOrIndex>')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Delete a CARS configuration')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2016,7 +2028,11 @@ configCommand
         deleteCARSConfig(info, cfg);
     });
 
-configCommand.action(async (options) => {
+configCommand
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
+    .action(async (options) => {
     if (options.key) {
         await remakeWallet(options.key, options.network, options.storage)
     }
@@ -2027,6 +2043,9 @@ configCommand.action(async (options) => {
 // Build local artifact
 program
     .command('build [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Build local artifact for release')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2044,6 +2063,9 @@ const projectCommand = program
 // List projects
 projectCommand
     .command('ls [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('List all projects on a chosen CARS Cloud server')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2070,6 +2092,9 @@ projectCommand
 // Show project info
 projectCommand
     .command('info [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Show detailed info about the project in the chosen configuration')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2083,6 +2108,9 @@ projectCommand
 // Add admin
 projectCommand
     .command('add-admin <identityKeyOrEmail> [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Add an admin to the project of the chosen configuration')
     .action(async (identityKeyOrEmail, nameOrIndex, options) => {
         if (options.key) {
@@ -2106,6 +2134,9 @@ projectCommand
 // Remove admin
 projectCommand
     .command('remove-admin <identityKeyOrEmail> [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Remove an admin from the project of the chosen configuration')
     .action(async (identityKeyOrEmail, nameOrIndex, options) => {
         if (options.key) {
@@ -2129,6 +2160,9 @@ projectCommand
 // List admins
 projectCommand
     .command('list-admins [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('List the admins for the project of the chosen configuration')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2148,6 +2182,9 @@ projectCommand
 // Project logs
 projectCommand
     .command('logs [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('View logs of the project from the chosen configuration')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2168,6 +2205,9 @@ projectCommand
 projectCommand
     .command('resource-logs [nameOrIndex]')
     .description('View resource logs from the cluster for this project')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .option('--resource <resource>', 'Resource type: frontend|backend|mongo|mysql')
     .option('--since <period>', 'Time period (one of: 5m,15m,30m,1h,2h,6h,12h,1d,2d,7d)', '1h')
     .option('--tail <lines>', 'Number of lines (1-10000)', '1000')
@@ -2189,6 +2229,9 @@ projectCommand
 // List releases
 projectCommand
     .command('releases [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('List all releases for the project from the chosen configuration')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2210,6 +2253,9 @@ projectCommand
 // Set frontend domain non-interactive
 projectCommand
     .command('domain:frontend <domain> [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Set the frontend custom domain for the project of the chosen configuration (non-interactive)')
     .action(async (domain, nameOrIndex, options) => {
         if (options.key) {
@@ -2223,6 +2269,9 @@ projectCommand
 // Set backend domain non-interactive
 projectCommand
     .command('domain:backend <domain> [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Set the backend custom domain for the project of the chosen configuration (non-interactive)')
     .action(async (domain, nameOrIndex, options) => {
         if (options.key) {
@@ -2236,6 +2285,9 @@ projectCommand
 // Web UI config: view
 projectCommand
     .command('webui-config:view [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('View the current Web UI config of the project')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2261,6 +2313,9 @@ projectCommand
 // Web UI config: set key
 projectCommand
     .command('webui-config:set <key> <value> [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Set (add/update) a key in the Web UI config of the project')
     .action(async (key, value, nameOrIndex, options) => {
         if (options.key) {
@@ -2295,6 +2350,9 @@ projectCommand
 // Web UI config: delete key
 projectCommand
     .command('webui-config:delete <key> [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Delete a key from the Web UI config of the project')
     .action(async (key, nameOrIndex, options) => {
         if (options.key) {
@@ -2326,6 +2384,9 @@ projectCommand
 // Billing stats
 projectCommand
     .command('billing-stats [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('View billing statistics for the project. You can specify filters with options.')
     .option('--start <date>', 'Start date (YYYY-MM-DD)')
     .option('--end <date>', 'End date (YYYY-MM-DD)')
@@ -2366,6 +2427,9 @@ projectCommand
 // Top up balance
 projectCommand
     .command('topup [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Top up the project balance. If --amount is not specified, you will be prompted.')
     .option('--amount <sats>', 'Amount in satoshis to add')
     .action(async (nameOrIndex, options) => {
@@ -2400,6 +2464,9 @@ projectCommand
 // Delete project
 projectCommand
     .command('delete [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Delete the project. This cannot be undone. Use --force to confirm.')
     .option('--force', 'Skip confirmation prompts')
     .action(async (nameOrIndex, options) => {
@@ -2449,6 +2516,9 @@ const releaseCommand = program
 // Get upload URL for a new release
 releaseCommand
     .command('get-upload-url [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Create a new release for a chosen CARS configuration and get the upload URL')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2471,6 +2541,9 @@ releaseCommand
 // Upload artifact to given URL
 releaseCommand
     .command('upload-files <uploadURL> <artifactPath>')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Upload a built artifact to the given URL')
     .action(async (uploadURL, artifactPath, options) => {
         if (options.key) {
@@ -2482,6 +2555,9 @@ releaseCommand
 // View logs of a release
 releaseCommand
     .command('logs [releaseId] [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('View logs of a release by its ID. If no releaseId is provided, select from a menu.')
     .action(async (releaseId, nameOrIndex, options) => {
         if (options.key) {
@@ -2505,6 +2581,9 @@ releaseCommand
 // Create new release and upload latest artifact immediately
 releaseCommand
     .command('now [nameOrIndex]')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Create a new release and automatically upload the latest artifact')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
@@ -2541,6 +2620,9 @@ const artifactCommand = program
 
 artifactCommand
     .command('ls')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('List all local artifacts')
     .action(() => {
         printArtifactsList();
@@ -2548,6 +2630,9 @@ artifactCommand
 
 artifactCommand
     .command('delete <artifactName>')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .description('Delete a local artifact')
     .action(async (artifactName, options) => {
         if (options.key) {
@@ -2570,6 +2655,9 @@ artifactCommand.action(async () => {
 program
     .command('global-info [nameOrIndex]')
     .description('View global public info (public keys, pricing, etc.) from a chosen CARS Cloud')
+    .option('--key <key>', 'Private key to use with CARS')
+    .option('--network <network>', 'Network to use with CARS')
+    .option('--storage <storage>', 'Wallet storage to use with CARS')
     .action(async (nameOrIndex, options) => {
         if (options.key) {
             await remakeWallet(options.key, options.network, options.storage)
