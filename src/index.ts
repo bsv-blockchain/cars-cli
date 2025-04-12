@@ -2685,12 +2685,6 @@ program
         }
     });
 
-// Options for key, network, and storage
-program
-    .option('--key <key>', 'Private key to use with CARS')
-    .option('--network <network>', 'Network to use with CARS')
-    .option('--storage <storage>', 'Wallet storage to use with CARS');
-
 // If `cars` is invoked without args, enter the main menu
 (async function main() {
     if (process.argv.length <= 2) {
