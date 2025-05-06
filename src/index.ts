@@ -1465,7 +1465,7 @@ async function editSyncConfiguration(engineConfig: any) {
 }
 
 // Trigger the admin-protected endpoints via /admin/syncAdvertisements or /admin/startGASPSync
-async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertisements' | 'startGASPSync') {
+async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertisements' | 'startGASPSync' | 'evictOutpoint', txid?: string, outputIndex?: string, service?: string) {
     if (!config.projectID) {
         console.error(chalk.red('❌ No project ID set.'));
         return;
@@ -1473,7 +1473,9 @@ async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertise
     const client = await buildAuthFetch(config);
     const route = endpoint === 'syncAdvertisements'
         ? `/api/v1/project/${config.projectID}/admin/syncAdvertisements`
-        : `/api/v1/project/${config.projectID}/admin/startGASPSync`;
+        :  endpoint === 'startGASPSync'
+            ? `/api/v1/project/${config.projectID}/admin/startGASPSync`
+            : `/api/v1/project/${config.projectID}/admin/evictOutpoint`;
     const spinner = ora(`Triggering admin endpoint: ${endpoint}...`).start();
     try {
         let resp = await client.fetch(`${config.CARSCloudURL}${route}`, {
@@ -1481,7 +1483,10 @@ async function triggerAdminEndpoint(config: CARSConfig, endpoint: 'syncAdvertise
             headers: {
                 'content-type': 'application/json'
             },
-            body: '{}'
+            body: endpoint === 'evictOutpoint' ? JSON.stringify({
+                txid,
+                outputIndex: Number(outputIndex)
+            }) : '{}'
         });
         resp = await resp.json()
         spinner.succeed(`✅ ${endpoint} responded: ${JSON.stringify(resp)}`);
@@ -1498,7 +1503,6 @@ async function mainMenu() {
     console.log(chalk.cyanBright(`\nWelcome to CARS CLI ⚡`));
     console.log(chalk.cyan(`Your Deployment Companion for Bitcoin-Powered Clouds\n`));
 
-    const info = loadCARSConfigInfo();
     const choices = [
         { name: 'Manage CARS Configurations', value: 'config' },
         { name: 'Manage Projects', value: 'project' },
@@ -1643,6 +1647,7 @@ async function projectMenu() {
         { name: 'Edit Advanced Engine Config', value: 'edit-engine-config' },
         { name: 'Trigger admin syncAdvertisements', value: 'admin-sync-ads' },
         { name: 'Trigger admin startGASPSync', value: 'admin-start-gasp' },
+        { name: 'Evict an outpoint', value: 'admin-evict' },
         { name: 'Back to main menu', value: 'back' }
     ];
 
@@ -1779,6 +1784,29 @@ async function projectMenu() {
         } else if (action === 'admin-start-gasp') {
             const config = await pickCARSConfig(info);
             await triggerAdminEndpoint(config, 'startGASPSync');
+        } else if (action === 'admin-evict') {
+            const config = await pickCARSConfig(info);
+            const { txid, outputIndex, service } = await inquirer.prompt([
+                {
+                    type: 'input',
+                    name: 'txid',
+                    validate: x => x.length === 64 ? true : 'Must be 64 character hex',
+                    message: 'TXID to evict'
+                },
+                {
+                    type: 'input',
+                    name: 'outputIndex',
+                    validate: x => Number.isInteger(Number(x)) ? true : 'Must be an integer',
+                    message: 'Output index to evict'
+                },
+                {
+                    type: 'input',
+                    name: 'service',
+                    message: 'Lookup service to evict from (enter for all',
+                    validate: x => x.length === 0 || x.startsWith('ls_') ? true : 'Must start with ls_'
+                }
+            ]);
+            await triggerAdminEndpoint(config, 'evictOutpoint', txid, outputIndex, service.length === 0 ? undefined : service);
         } else {
             done = true;
         }
