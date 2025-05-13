@@ -547,7 +547,7 @@ async function buildArtifact(nameOrIndex?: string) {
   const deploy = activeConfig.deploy || [];
 
   console.log(chalk.blue('🛠  Building local project artifact...'));
-  spawnSync(npmCmd, ['i'], { stdio: 'inherit' });
+  spawnSync(npmCmd, ['i'], { stdio: 'inherit', shell: isWindows });
 
   // Backend build
   if (deploy.includes('backend')) {
@@ -559,7 +559,7 @@ async function buildArtifact(nameOrIndex?: string) {
           process.exit(1);
         }
         // Language is sCrypt, run compile if script exists
-        spawnSync(npmCmd, ['i'], { cwd: 'backend', stdio: 'inherit' });
+        spawnSync(npmCmd, ['i'], { cwd: 'backend', stdio: 'inherit', shell: isWindows });
 
         // Check if compile script exists in backend/package.json
         const backendPkg = JSON.parse(fs.readFileSync('backend/package.json', 'utf-8'));
@@ -567,21 +567,21 @@ async function buildArtifact(nameOrIndex?: string) {
           console.error(chalk.red('❌ No "compile" script found in backend package.json for sCrypt contracts.'));
           process.exit(1);
         }
-        const compileResult = spawnSync(npmCmd, ['run', 'compile'], { cwd: 'backend', stdio: 'inherit' });
+        const compileResult = spawnSync(npmCmd, ['run', 'compile'], { cwd: 'backend', stdio: 'inherit', shell: isWindows });
         if (compileResult.status !== 0) {
           console.error(chalk.red('❌ sCrypt contract compilation failed.'));
           process.exit(1);
         }
-        const buildResult = spawnSync(npmCmd, ['run', 'build'], { cwd: 'backend', stdio: 'inherit' });
+        const buildResult = spawnSync(npmCmd, ['run', 'build'], { cwd: 'backend', stdio: 'inherit', shell: isWindows });
         if (buildResult.status !== 0) {
           console.error(chalk.red('❌ Backend build failed.'));
           process.exit(1);
         }
       } else {
-        spawnSync(npmCmd, ['i'], { cwd: 'backend', stdio: 'inherit' });
+        spawnSync(npmCmd, ['i'], { cwd: 'backend', stdio: 'inherit', shell: isWindows });
         const backendPkg = JSON.parse(fs.readFileSync('backend/package.json', 'utf-8'));
         if (backendPkg.scripts && backendPkg.scripts.build) {
-          const buildResult = spawnSync(npmCmd, ['run', 'build'], { cwd: 'backend', stdio: 'inherit' });
+          const buildResult = spawnSync(npmCmd, ['run', 'build'], { cwd: 'backend', stdio: 'inherit', shell: isWindows });
           if (buildResult.status !== 0) {
             console.error(chalk.red('❌ Backend build failed.'));
             process.exit(1);
@@ -616,8 +616,8 @@ async function buildArtifact(nameOrIndex?: string) {
 
     if (frontendLang === 'react') {
       // React build
-      spawnSync(npmCmd, ['i'], { cwd: 'frontend', stdio: 'inherit' });
-      const buildResult = spawnSync(npmCmd, ['run', 'build'], { cwd: 'frontend', stdio: 'inherit' });
+      spawnSync(npmCmd, ['i'], { cwd: 'frontend', stdio: 'inherit', shell: isWindows });
+      const buildResult = spawnSync(npmCmd, ['run', 'build'], { cwd: 'frontend', stdio: 'inherit', shell: isWindows });
       if (buildResult.status !== 0) {
         console.error(chalk.red('❌ Frontend build (react) failed.'));
         process.exit(1);
