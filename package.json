@@ -1,6 +1,6 @@
 {
     "name": "@bsv/cars-cli",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "main": "dist/index.js",
     "type": "module",
     "bin": {
@@ -21,7 +21,7 @@
         "tar": "^6.1.11"
     },
     "devDependencies": {
-        "@types/node": "^20.4.2",
+        "@types/node": "^20.17.46",
         "@types/tar": "^6.1.13",
         "typescript": "^5.2.2"
     }
