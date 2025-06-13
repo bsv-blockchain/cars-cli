@@ -1273,6 +1273,167 @@ async function deleteProject(config: CARSConfig) {
 }
 
 /**
+ * GitHub Actions Setup Wizard
+ */
+async function setupGitHubActionsWizard(config: CARSConfig) {
+  console.log(chalk.blue('\n🚀 Starting GitHub Actions Deployment Setup Wizard...'));
+
+  if (!config.projectID || !config.CARSCloudURL) {
+    console.error(chalk.red('❌ The selected configuration is missing a Project ID or CARS Cloud URL.'));
+    return;
+  }
+
+  const info = loadCARSConfigInfo();
+  const configIndex = (info.configs || []).indexOf(config);
+  if (configIndex === -1) {
+    console.error(chalk.red('❌ Could not find the selected configuration in deployment-info.json. This is unexpected.'));
+    return;
+  }
+
+  // --- 1. Generate new key ---
+  const spinner = ora('Generating a new private key for GitHub Actions...').start();
+  const newPrivateKey = PrivateKey.fromRandom();
+  const newKeyHex = newPrivateKey.toHex();
+  const newIdentityKey = newPrivateKey.toPublicKey().toString();
+  spinner.succeed('✅ New private key generated.');
+
+  // --- 2. Register the new key with CARS Cloud ---
+  spinner.start('Registering the new key with CARS Cloud...');
+  const originalWalletClient = walletClient;
+  const originalAuthFetch = authFetch;
+
+  try {
+    // Temporarily switch to the new key's wallet
+    await remakeWallet(newKeyHex, config.network as WalletNetwork);
+
+    // Make a benign, authenticated call to ensure the user is created on the server
+    const registrationResponse = await authFetch.fetch(`${config.CARSCloudURL}/api/v1/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}'
+    });
+    if (!registrationResponse.ok) {
+        const errorBody = await registrationResponse.text();
+        throw new Error(`Registration call failed with status ${registrationResponse.status}: ${errorBody}`);
+    }
+
+    spinner.succeed('✅ New key registered with CARS Cloud.');
+  } catch (error) {
+    spinner.fail('❌ Failed to register the new key.');
+    handleRequestError(error);
+    return; // Exit wizard on failure
+  } finally {
+    // IMPORTANT: Restore the original user's wallet client and auth fetch
+    walletClient = originalWalletClient;
+    authFetch = originalAuthFetch;
+  }
+
+  // --- 3. Add new key as a project admin ---
+  spinner.start(`Adding the new key as an admin to project "${config.projectID}"...`);
+  const addAdminResult = await safeRequest(
+    authFetch, // Using the original user's auth
+    config.CARSCloudURL,
+    `/api/v1/project/${config.projectID}/addAdmin`,
+    { identityKeyOrEmail: newIdentityKey }
+  );
+
+  if (addAdminResult && addAdminResult.message) {
+    spinner.succeed(`✅ New key added as a project admin.`);
+  } else {
+    spinner.fail('❌ Failed to add the new key as a project admin.');
+    console.error(chalk.red(addAdminResult?.error || 'Unknown error.'));
+    return; // Exit wizard on failure
+  }
+
+  // --- 4. Get branch name ---
+  const { branch } = await inquirer.prompt([
+    {
+      type: 'input',
+      name: 'branch',
+      message: 'Enter the name of the branch to deploy from:',
+      default: 'master'
+    }
+  ]);
+
+  // --- 5. Generate YAML and provide instructions ---
+  const yamlContent = `name: Deployment
+on:
+  push:
+    branches:
+      - ${branch.trim()}
+
+jobs:
+  build:
+    name: Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install CARS globally
+        run: npm i -g @bsv/cars-cli@latest
+
+      - name: Build artifact
+        run: cars build ${configIndex}
+
+      - name: Release artifact
+        run: cars release now ${configIndex} --key "\${{ secrets.CARS_PRIVATE_KEY }}"
+`;
+
+  console.log(chalk.greenBright('\n--- GitHub Actions Setup Instructions ---'));
+
+  console.log(chalk.bold('\nStep 1: Add Repository Secret'));
+  console.log('Go to your GitHub repository settings page: Settings > Secrets and variables > Actions.');
+  console.log('Click "New repository secret" and add the following:');
+  console.log(chalk.cyan('Name:   ') + chalk.bold('CARS_PRIVATE_KEY'));
+  console.log(chalk.cyan('Secret: '));
+  console.log(chalk.magenta(newKeyHex));
+  console.log(chalk.yellow('\nThis key allows GitHub Actions to deploy on your behalf. Keep it safe!'));
+
+  console.log(chalk.bold('\nStep 2: Add Workflow File'));
+  console.log('Create a file named ' + chalk.bold('.github/workflows/deploy.yaml') + ' in your repository with the following content:');
+  console.log(chalk.gray('--------------------------------------------------'));
+  console.log(chalk.white(yamlContent));
+  console.log(chalk.gray('--------------------------------------------------'));
+
+  const workflowsDir = path.join(process.cwd(), '.github', 'workflows');
+  const deployFilePath = path.join(workflowsDir, 'deploy.yaml');
+
+  if (fs.existsSync(deployFilePath)) {
+    console.log(chalk.yellow(`\n⚠️  A file already exists at ${deployFilePath}.`));
+    console.log('Please update it manually with the content above if needed.');
+  } else {
+    const { createFile } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'createFile',
+        message: `Create the ${chalk.bold('.github/workflows/deploy.yaml')} file automatically?`,
+        default: true
+      }
+    ]);
+
+    if (createFile) {
+      try {
+        fs.mkdirSync(workflowsDir, { recursive: true });
+        fs.writeFileSync(deployFilePath, yamlContent, 'utf-8');
+        console.log(chalk.green(`✅ Successfully created ${deployFilePath}.`));
+      } catch (error) {
+        console.error(chalk.red(`❌ Failed to create workflow file.`));
+        handleRequestError(error);
+      }
+    }
+  }
+
+  console.log(chalk.bold.green('\n🎉 All set!'));
+  console.log(`Commit and push the new workflow file. Any future pushes to the "${branch.trim()}" branch will now automatically deploy your project.`);
+}
+
+/**
  * Global Public Info
  */
 async function showGlobalPublicInfo() {
@@ -1647,6 +1808,7 @@ async function projectMenu() {
     { name: 'Billing: View Stats', value: 'billing-stats' },
     { name: 'Billing: Top Up Balance', value: 'topup' },
     { name: 'Delete Project', value: 'delete' },
+    { name: 'Setup GitHub Actions Deployment', value: 'setup-github-actions' },
     { name: 'Edit Advanced Engine Config', value: 'edit-engine-config' },
     { name: 'Trigger admin syncAdvertisements', value: 'admin-sync-ads' },
     { name: 'Trigger admin startGASPSync', value: 'admin-start-gasp' },
@@ -1778,6 +1940,9 @@ async function projectMenu() {
     } else if (action === 'delete') {
       const config = await pickCARSConfig(info);
       await deleteProject(config);
+    } else if (action === 'setup-github-actions') {
+      const config = await pickCARSConfig(info);
+      await setupGitHubActionsWizard(config);
     } else if (action === 'edit-engine-config') {
       const config = await pickCARSConfig(info);
       await editAdvancedEngineConfig(config);
