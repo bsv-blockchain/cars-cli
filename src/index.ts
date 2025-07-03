@@ -1284,7 +1284,13 @@ async function setupGitHubActionsWizard(config: CARSConfig) {
   }
 
   const info = loadCARSConfigInfo();
-  const configIndex = (info.configs || []).indexOf(config);
+  const configIndex = (info.configs || []).findIndex(
+    c =>
+      c.name === config.name &&
+      c.provider === config.provider &&
+      c.CARSCloudURL === config.CARSCloudURL &&
+      c.projectID === config.projectID
+  );
   if (configIndex === -1) {
     console.error(chalk.red('❌ Could not find the selected configuration in deployment-info.json. This is unexpected.'));
     return;
