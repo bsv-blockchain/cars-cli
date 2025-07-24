@@ -1319,8 +1319,8 @@ async function setupGitHubActionsWizard(config: CARSConfig) {
       body: '{}'
     });
     if (!registrationResponse.ok) {
-        const errorBody = await registrationResponse.text();
-        throw new Error(`Registration call failed with status ${registrationResponse.status}: ${errorBody}`);
+      const errorBody = await registrationResponse.text();
+      throw new Error(`Registration call failed with status ${registrationResponse.status}: ${errorBody}`);
     }
 
     spinner.succeed('✅ New key registered with CARS Cloud.');
@@ -1498,6 +1498,7 @@ async function editAdvancedEngineConfig(config: CARSConfig) {
       { name: 'Toggle logTime', value: 'logTime' },
       { name: 'Set logPrefix', value: 'logPrefix' },
       { name: 'Toggle throwOnBroadcastFailure', value: 'throwFail' },
+      { name: 'Toggle suppressDefaultSyncAdvertisements', value: 'suppressDefaultSyncAds' },
       { name: 'Edit syncConfiguration', value: 'syncConfig' },
       { name: 'Done', value: 'done' }
     ];
@@ -1531,6 +1532,8 @@ async function editAdvancedEngineConfig(config: CARSConfig) {
       engineConfig.logPrefix = prefix;
     } else if (action === 'throwFail') {
       engineConfig.throwOnBroadcastFailure = !engineConfig.throwOnBroadcastFailure;
+    } else if (action === 'suppressDefaultSyncAds') {
+      engineConfig.suppressDefaultSyncAdvertisements = !(engineConfig.suppressDefaultSyncAdvertisements ?? true);
     } else if (action === 'syncConfig') {
       await editSyncConfiguration(engineConfig);
     }
