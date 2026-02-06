@@ -10,8 +10,8 @@
         "build": "tsc"
     },
     "dependencies": {
-        "@bsv/sdk": "^1.6.20",
-        "@bsv/wallet-toolbox-client": "^1.5.19",
+        "@bsv/sdk": "^2.0.1",
+        "@bsv/wallet-toolbox-client": "^2.0.5",
         "axios": "^1.4.0",
         "chalk": "^4.1.2",
         "cli-table3": "^0.6.5",
